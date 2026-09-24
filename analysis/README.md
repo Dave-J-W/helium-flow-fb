@@ -15,7 +15,7 @@ Regenerate every number and figure (Python 3.12, versions pinned in `requirement
     python classify.py    # per-episode lid table to console
 
 The controller that uses these numbers is specified in
-`..\o2-purge\docs\superpowers\specs\2026-09-24-o2-purge-feedback-design.md` (its section 2.1).
+`../docs/superpowers/specs/2026-09-24-o2-purge-feedback-design.md` (its section 2.1).
 
 The flow readbacks are assumed to be in helium units, with the Alicat's gas table set to He.
 If it were set to N2 while flowing He, every flow would carry a gas-correction error, and so
