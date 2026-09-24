@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+# intermediate array rebuilt by analysis/analysis.py
+analysis/J_rows.npy
+# pre-git backups
+*.bak-*
