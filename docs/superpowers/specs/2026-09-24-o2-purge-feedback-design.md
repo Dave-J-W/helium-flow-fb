@@ -2,6 +2,8 @@
 
 Date: 2026-09-24
 Status: design under review. No code has been written. No PV has been created or written.
+Measured enclosure physics from the 17–24 Sep 2026 archiver data were added on 2026-09-24 (section 2.1).
+Values they confirm or replace are tagged MEASURED where they appear.
 
 ## 1. Purpose
 
@@ -18,6 +20,8 @@ becomes a panel on top of it.
 
 Evidence tags used below:
 - **VERIFIED**: read from source or documentation.
+- **MEASURED**: fitted to archived data from this enclosure (section 2.1 gives the source and the event count).
+  Values from one or two events are marked "n=1" or "n=2".
 - **DERIVED**: follows from reasoning.
 - **PROVISIONAL**: a starting value to be tuned on the hardware.
 
@@ -26,10 +30,11 @@ Evidence tags used below:
 | Item | Facts |
 |---|---|
 | MFC | Alicat BASIS, EPICS support `epics-modules/ip` `ipApp/Db/Alicat_BC.db` + `.proto` (VERIFIED). Max purge flow 20 SLPM, resolution ~0.01 SLPM. Alicat ramp rate normally 3 SLPM/s. |
-| O2 analyzer | Updates at ~1 Hz. Stable to ~0.01 % O2 over 10 min. ~2 min before a slope change is confidently visible (slower at maintenance flows; a purge-start drop is visible after ~1 min). |
-| Enclosure modes | Same volume, different leak rates. Mode A needs ~0.25 SLPM, mode B ~0.8 SLPM, to hold ~0.99 % O2. |
+| O2 analyzer | Updates at ~1 Hz. Noise 0.8–0.9 m% O2 per 10 s sample at hold; drift +0.13 m%/min (MEASURED). A flow change reaches the reading after **60–85 s at hold flow** and **7–13 s at 20 SLPM** (MEASURED, section 2.1.3). |
+| Enclosure modes | Same volume, different leak behaviour. **Mode A = normal lid** (~0.25 SLPM for ~1.0 % O2); **mode B = collimator lid** (~0.84 SLPM for 0.99 %). Mode B's O2 ingress rises steeply as flow falls (MEASURED, section 2.1.4). |
+| Enclosure volume | **42.2 ± 0.7 L** from 11 purges on the weekly archive; 40.4–40.7 L from two 10 s purges (MEASURED, section 2.1.2). |
 | Surface limit | Flow above ~2 SLPM may vibrate the liquid surface and prevent X-ray measurement. The exact PID ceiling is to be tested. |
-| Ambient O2 | ~19.4 % (PROVISIONAL, local reading). |
+| Ambient O2 | The open-lid reading is **not constant**: 19.0–19.6 %. It peaks right after a lift (19.48–19.56 %) and relaxes to ~19.2 % over 1.5 h; one dip to 18.95 % (MEASURED, section 2.1.8). Use 19.4 % as the model value. |
 
 Live PV names (from the user, 2026-09-24):
 
@@ -56,6 +61,119 @@ Writes this design makes to **existing** PVs. Both need sign-off from the owner 
 - `$(P)$(R)Run`: resume from hold.
 
 Nothing else existing is modified.
+
+## 2.1 Measured enclosure physics (archiver data, 17–24 Sep 2026)
+
+Source: `analysis/` in this repo (README.md, `figures/fig1`–`fig13`, raw CSVs in `analysis/data/`).
+`python analysis/run_all.py` regenerates every number here from the CSVs.
+
+| Data | PV | Sampling |
+|---|---|---|
+| Weekly O2, 17–24 Sep | `15IDC:D1Dmm_calc` | 600 s |
+| Weekly setpoint | `15IDC:Alicat1:Setpoint_RBV` | on change |
+| Weekly flow | `15IDC:Alicat1:Flow_RBV` | ~180 s |
+| High-res O2, 24 Sep | `15IDC:D1Dmm_calc` | 10 s, 00:59–04:59 and 05:46–13:46 |
+| High-res flow and setpoint, 24 Sep | as above | ~10 s, 09:48–13:48 |
+
+The clocks of the three PVs agree to 0 ± 4 s.
+
+### 2.1.1 Model
+
+One well-mixed volume V, purged with pure helium at flow F, with O2 entering through the lid seals at rate J:
+
+```
+V · dC/dt = J(F, lid) − F · C          C in % O2, V in L, F in SLPM He, t in min
+J in %·L/min;  ×10 = mL O2/min
+steady state:  C_ss = J / F  =  J[mL/min] / (10 · F[SLPM])
+flow off:      dC/dt = k · (C_amb − C),   k = 0.00142 /min  (τ = 11.8 h, normal lid)
+```
+
+Replaying the whole week with only these global numbers and the delivered flow gives, with no per-episode refit:
+- **normal lid:** 99 % of 428 samples within ×/÷1.5, median error 8 %
+- **collimator lid:** 68 % within ×/÷1.5, median error 32 %. The error is limited by purge edges known only to ±90 s.
+
+The model's known departures are listed in 2.1.5.
+
+### 2.1.2 Volume and purge (MEASURED)
+
+- **V = 42.2 ± 0.7 L** from 11 exactly-timed purges at 3, 5.2 and 20 SLPM (2.7 % rms). The two 10 s purges give **40.7 and 40.4 L**.
+  Use **V = 41 L** in the simulator.
+- **Time constant τ = V/F:** 2.1 min at 20 SLPM, 53 min at 0.8 SLPM, **169 min at 0.25 SLPM**.
+- **Helium to dilute air to C:** V·ln(19.4/C), whatever the flow; ≈ 125 L to reach 1 %. The flow sets only the time.
+- **The existing timer purge** is **20 SLPM × 6.00 min**. That is 41 purges this week, fixed at 6.00 min by high-res setpoint readings caught mid-ramp.
+  It ends at ~1.1 % O2 at the sensor. **Purges used 70 % of the week's helium** (5700 of 8125 L).
+- **Drop at 60 s** after the purge timer starts, for a closed box starting from air: **6.8 and 7.4 %** (n=2, 10 s data). An open box has not been measured.
+- The Alicat reaches 20 SLPM within one 10 s sample (a mid-ramp reading of 11.85 SLPM).
+
+### 2.1.3 Transport delays (MEASURED, 10 s data)
+
+| Event | Delay before O2 moves |
+|---|---|
+| Flow 0.25 → 0 SLPM, lid on | 71 s, 60 s (n=2) |
+| Flow 0 → 0.25 SLPM, lid on | O2 keeps rising for 85 s (n=1) |
+| 20 SLPM purge on | 13 s (edge ±5 s); ~7 s in the second purge, assuming the 6.00-min program |
+
+**At hold flow the loop has ~80 s of dead time.** A flow interruption shorter than about 1 min is invisible in O2.
+
+### 2.1.4 O2 ingress per lid (MEASURED, weekly data, 0.23–1.8 SLPM)
+
+| Lid (mode) | Ingress J (mL O2/min) | C_ss | Flow for 0.99 % | Flow for 0.5 % |
+|---|---|---|---|---|
+| normal (A) | **2.6·F^+0.04** (×/÷1.27): flat | 0.26/F % | 0.25 SLPM | 0.51 SLPM |
+| collimator (B) | **7.1·F^−0.87** (×/÷1.31): falls with flow | 0.71·F^−1.87 % | 0.84 SLPM | 1.21 SLPM |
+
+- **Mode B needs over-pressure to seal.** At 0.25 SLPM its ingress is 23–30 mL/min, and O2 climbs toward ~9.5 % with τ = 2.8 h. That happened three times this week.
+- **Seal force spread.** Within a mode, J scatters ×/÷1.3 between closures, attributed to how hard the lid hardware is tightened. Two episodes fit neither family.
+- **Telling the lids apart** is only possible at low flow (≲ 1 SLPM). Above ~2 SLPM the two families converge.
+- **Flow off, normal lid.** Ingress at 1 % O2 is 10.7 mL/min, 4× that with 0.25 SLPM flowing.
+  The measured slopes are 0.024 and 0.033 %/min (n=2 at 10 s), against 0.026 %/min from the 7 h run on 21 Sep.
+  The collimator lid's flow-off rate is unmeasured.
+
+### 2.1.5 Mixing and the sensor zone (MEASURED, n=2)
+
+- **Imperfect mixing during the purge.** The 20 SLPM decay is exponential to ±3 %, but the apparent volume F/(−dlnC/dt) rises from 39 to 42 L through the purge. The residual has the same shape in both purges.
+- **Post-purge settling.** At the hold flow the reading keeps falling by **0.14–0.17 % with τ ≈ 65 s** (64 and 66 s). One well-mixed volume would take 169 min.
+  So the sensor sits in a zone that lags the bulk by about a minute. **At purge end, the sensor reads ~0.15 % above where it will settle.**
+- **Slow tails.** Some long post-purge tails (weekly data) decay more slowly than V/F, suggesting a slow O2 reservoir (sample, plastics). This is not modelled.
+
+### 2.1.6 Sealed-lid O2 behaviour: what the lid-open detector must ignore (MEASURED)
+
+| Situation | Largest rise rate | Level reached |
+|---|---|---|
+| Hold, any lid, flow on (10 s data, 12 h) | 0.0008 %/s (10 s difference) | — |
+| Flow off, lid on, final 20 s before a lift (clamps loosened?) | **0.0039 %/s** | 1.16 % |
+| Flow off, lid on, 7 h (21 Sep, weekly) | ≤ 0.0005 %/s | **9.2 %** |
+| Collimator lid starved at 0.25 SLPM (weekly) | ≤ 0.002 %/s | 5.7 % and rising |
+| All sealed 600 s intervals, week | 0.17 %/min = 0.0028 %/s | — |
+
+### 2.1.7 Lid removal (MEASURED, n=2 at 10 s; 32 more lifts at 600 s)
+
+| | Lift A (02:59) | Lift B (11:52) |
+|---|---|---|
+| last sealed → first big sample | 1.16 → 16.48 % | 1.85 (caught mid-rise) → 16.41 % |
+| **10 s difference at the lift** | **1.53 %/s** | **1.46 %/s** |
+| fast time constant | ≤ 5.6 s (bound) | **5.75 s (fitted; predicts the next sample to 0.06 %)** |
+| peak instantaneous slope (model) | — | ~3.2 %/s |
+| crosses 10 % after onset | ≤ 10 s | ~3.8 s (DERIVED from τ) |
+| > 18.5 % / > 19.0 % after onset | 20 s / 30 s | 20 s / 30 s |
+| flow switched off before the lift | 262 s | 76 s |
+
+- The two lifts overlay almost exactly. A ~6 s exponential carries 97 % of the step, followed by a 1–2 min tail.
+- In the weekly data, 31 of 32 lifts had the flow switched off first, and none of 32 was caught mid-rise at 600 s.
+- **One lift was never seen at 600 s** (24 Sep, open 2.0 min, then purged). Only 10 s data show it.
+
+### 2.1.8 Open-lid reading (MEASURED)
+
+- It peaks right after the lift (19.48 and 19.56 %), then relaxes, not linearly, to 19.19 % over 1.5 h.
+- One ~1 min dip reached **18.95 %** with the lid off (breath, or a helium pocket released).
+- The weekly 600 s open-lid samples read 19.03–19.58 %, with occasional 18.7–19.0 % readings while the flow was off.
+- **Any open/closed threshold near 19 % is unsafe.** The design's thresholds (10 %, 9 % arming, 18 % drop-check skip) all clear this range.
+
+### 2.1.9 Setpoint readback caveat (MEASURED, archiver level)
+
+- In the archiver, `Setpoint_RBV` **missed 25 of 41** timer purges and the 24 Sep 11:51:02 flow-off. `Flow_RBV` and the O2 both show them.
+- In the high-res export it read **0.43 and 19.55 SLPM mid-ramp**, so it may report a ramping, not final, setpoint.
+- Whether the PV itself or only its archiving misses the events is unknown. The flow-mismatch rule (5.1) compares `Setpoint_RBV` with `Flow_RBV`, so this matters (section 9).
 
 ## 3. Architecture
 
@@ -142,9 +260,22 @@ BASIS manual.**
    - Otherwise require `O2_start − O2_now` ≥ `MinDrop`. Default `MinDrop` = 1.0 % O2
      (PROVISIONAL; tune from logged purges).
    - If the check fails: **OPEN_STOP**.
+   - Measured basis: a closed box starting from air has dropped **6.8–7.4 %** by this point (n=2; 2.1.2), so 1.0 % leaves ~7× margin.
+     The response of an **open** box to 20 SLPM is unmeasured. The lid-open test (section 8) must confirm it stays below 1 %.
+   - The 18 % skip threshold clears every open-lid reading seen (≥ 18.67 %) by at least 0.67 % (2.1.8).
 5. **Early handoff**: when O2 < target − Δ continuously for 15 s, go to HANDOFF.
    Δ defaults to 0.15 %.
 6. **Timeout**: at 6.5 min, go to HANDOFF anyway and raise a MINOR "purge incomplete" alarm.
+
+**Measured timing conflict (DERIVED from 2.1.2, needs a decision; section 9).**
+- From air, reaching target − Δ = 0.84 % at 20 SLPM takes **6.4–6.6 min of flow** (V = 40.5–42.2 L). Add ~13 s of sensor delay and the 15 s hold.
+- With the defaults, the 6.5 min timeout will therefore often fire first, and "purge incomplete" becomes a routine alarm.
+- At 6.5 min the sensor reads 0.78–0.89 %. It then settles a further ~0.15 % within ~3 min (2.1.5), so the bulk is already lower than the reading.
+- Options:
+  - raise the timeout to ~7.5 min;
+  - hand off on target − Δ with a smaller Δ;
+  - accept the alarm.
+- Each extra minute at 20 SLPM costs 20 L of helium.
 
 ### 4.3 Blind purge (O2 unavailable)
 
@@ -190,6 +321,25 @@ operator presses Purge. Headroom for upsets comes from the tested PID ceiling (s
 
 This covers the case where the operator forgets Flow Zero before opening the enclosure.
 
+#### 4.6.1 Measured basis for inferring the lid state (MEASURED, 2.1.6–2.1.8)
+
+The two terms separate a lift from every sealed behaviour recorded:
+
+| Quantity | Lid lifted (n=2 at 10 s) | Sealed, worst case seen | Margin at the design threshold |
+|---|---|---|---|
+| 10 s rise rate | **1.46–1.53 %/s** | **0.0039 %/s** (flow off, clamps being loosened) | `LidSlope` 0.2 %/s: **7×** below lifts, **51×** above sealed |
+| O2 level | > 18.8 % within 20 s, > 19 % within 30 s | 9.2 % (7 h flow off); 5.7 % and rising (collimator lid starved) | 10 %: lifts cross in ~4 s; nothing sealed reached it |
+| Both together | yes, ~5–10 s after onset | never | — |
+
+- **Neither term alone is enough.** A sealed box with the flow off does creep past 10 %: 9.2 % after 7 h on 21 Sep, heading for ambient. But it does so at ≤ 0.0005 %/s. A cracked lid or a starved collimator lid is similarly slow. The rate term rejects all of these.
+- **Detection latency** (DERIVED from the measured τ = 5.75 s): O2 crosses 10 % ~4 s after the lid starts to lift, and the 5 s filter completes ~9 s after.
+  At that point the trailing-60 s maximum of the 10 s difference is ~1.5 %/s, 7× over `LidSlope`.
+  **Expect OPEN_STOP within ~10 s of a lift.** The 10 s archive shows the reading at > 16 % one sample after onset in both lifts.
+- **`LidSlope` = 0.2 %/s is supported by the data and may stay.** Anything from ~0.05 to ~0.5 %/s keeps at least 3× margin on both sides.
+  At the analyzer's 1 Hz, the 10 s difference behaves the same way. The peak instantaneous slope is ~3.2 %/s.
+- **Pre-lift warning (optional, n=1).** In the 20 s before lift A, O2 rose at 0.16 %/min, 5× the flow-off leak-in. It could serve as an early "clamps released" hint, but one event is not enough to act on.
+- **Not covered:** the collimator lid has no 10 s record. The lift kinetics are expected to be similar (same box and sensor), but this is unverified.
+
 ### 4.7 IOC restart
 
 The Alicat holds its last setpoint on its own, so helium keeps flowing if the IOC dies
@@ -205,9 +355,10 @@ The Alicat holds its last setpoint on its own, so helium keeps flowing if the IO
 
 | Situation | Flow | Alarm | Recovery |
 |---|---|---|---|
-| No O2 drop at 60 s (confirmed open enclosure) | **0** | MAJOR "no O2 drop, enclosure open?" | Operator closes enclosure, presses Purge |
-| O2 > 10 % for 5 s AND fast rise (lid opened without Flow Zero) | **0** | MAJOR "enclosure opened, flow stopped" | Operator closes enclosure, presses Purge |
-| Operator Flow Zero | **0** | none | Operator presses Purge |
+| No O2 drop at 60 s (confirmed open enclosure). A closed box drops 6.8–7.4 % by then (MEASURED) | **0** | MAJOR "no O2 drop, enclosure open?" | Operator closes enclosure, presses Purge |
+| O2 > 10 % for 5 s AND fast rise (lid opened without Flow Zero). Fires ~10 s after a lift (DERIVED from measured kinetics, 4.6.1) | **0** | MAJOR "enclosure opened, flow stopped" | Operator closes enclosure, presses Purge |
+| Operator Flow Zero. With the lid kept on, O2 starts rising 60–85 s later at 0.024–0.033 %/min, about +0.5 % in 20 min (MEASURED, normal lid) | **0** | none | Operator presses Purge |
+| Lid lifted and replaced between purges faster than the archive samples (seen once: 2 min open, 24 Sep 11:52) | follows the operator's Flow Zero / Purge | none | Operator presses Purge. **Archive O2 at 1 Hz or 10 s**: a 600 s archive can miss the whole event |
 | Target − Δ not reached at 6.5 min | PID (via HANDOFF) | MINOR "purge incomplete". The flow-high alarm will likely follow. | Automatic |
 | O2 analyzer invalid or frozen | Expected flow, fixed (OPEN_LOOP) | MAJOR "O2 lost, running blind" | Operator presses Resume PID once O2 returns |
 | MFC on hold and `Run` did not clear it | none possible | MAJOR "MFC on hold" | Operator |
@@ -234,13 +385,24 @@ Alarm if `|Setpoint_RBV − Flow_RBV|` > max(0.05 SLPM, 5 % of setpoint) is stil
 
 ### 5.2 Expected flow
 
-Model (DERIVED): O2 ≈ 20.9·L/F, where L is the air leak rate and F the helium flow. So:
+Model (MEASURED, 2.1.4): C_ss = J(F)/F, with ingress J = a·F^b per lid. So:
 
 ```
-expected_flow = mode_base_flow × (0.99 / target)
+expected_flow = mode_base_flow × (0.99 / target)^n,     n = 1 / (1 − b)
 ```
 
-`mode_base_flow` is 0.25 SLPM (A) or 0.8 SLPM (B), both measured near 0.99 %.
+| Mode | `mode_base_flow` (for 0.99 %) | b | n | Flow for 0.5 % |
+|---|---|---|---|---|
+| A (normal lid) | 0.25 SLPM | +0.04 | **1.0** (the original linear rule) | 0.51 SLPM |
+| B (collimator lid) | 0.84 SLPM | −0.87 | **0.53** | 1.21 SLPM (the linear rule would give 1.66) |
+
+- The original rule (O2 ≈ 20.9·L/F, i.e. n = 1) holds for mode A. It **over-predicts mode B's flow change** by ~40 % at 0.5 %, because more over-pressure seals the collimator lid better.
+- The sensor's ambient is 19.4 %, not 20.9 %. This only matters for absolute leak-rate numbers.
+- Seal-force spread is ×/÷1.3 on J, so expect `expected_flow` to be off by up to ~30 % for a given closure. The PID absorbs that.
+- **Consequence for the flow alarms (section 5).**
+  - The MINOR "flow ≥ 1.5× expected" threshold sits only ~15 % above a badly sealed but normal closure in mode A. Expect occasional nuisance MINORs.
+  - The case that matters, the **collimator lid with mode A selected**, needs ~0.84/0.25 = 3.4× the mode-A flow. It therefore lands in the MAJOR "flow ≥ 2× expected / PID pinned" row, which is the right outcome.
+  - Two closures this week had 1.4–2.7× the normal-lid ingress without being collimator lids. They would sit between the two alarm thresholds.
 
 Uses of the expected flow: the HANDOFF flow, the OPEN_LOOP flow and the flow-alarm thresholds.
 
@@ -266,11 +428,37 @@ Both overrides are logged to `$(PP)LastAction` and increment `$(PP)OverrideCount
 - **Starting gains (PROVISIONAL).** `KP` ≈ −0.4 SLPM per %O2, `KI` ≈ 0.0033 /s. Replace with
   per-mode values from bump tests, using SIMC tuning with τc = 2θ.
 
+### 6.0 Process model at the hold flow (MEASURED inputs, DERIVED gains)
+
+| | Mode A (normal lid, 0.25 SLPM) | Mode B (collimator lid, 0.8 SLPM) |
+|---|---|---|
+| Steady gain K = dC_ss/dF | −3.8 %O2 per SLPM | −2.5 %O2 per SLPM |
+| Time constant τ = V/F | **169 min** | 53 min |
+| Dead time θ (transport ~80 s + half the 10-sample mean + scan) | ~95 s | ~95 s |
+| τ/θ | ~107 (effectively integrating) | ~33 (effectively integrating) |
+| Integrating slope k' = \|K\|/τ | 3.8e-4 %/s per SLPM | 8.0e-4 %/s per SLPM |
+| SIMC (integrating), τc = 2θ: Kc = 1/(k'(τc+θ)) | **9.3 SLPM/%** | **4.4 SLPM/%** |
+| τI = 4(τc + θ) | 1140 s | 1140 s |
+| → `KP`, `KI` | **−9.3, 8.8e-4 /s** | **−4.4, 8.8e-4 /s** |
+
+- **The model-derived `KP` is 10–20× the provisional −0.4.** The provisional gains would regulate very slowly: an upset of 0.1 % O2 would move the flow by only 0.04 SLPM at first.
+- **Noise check for the high gain.** Sensor noise is ~0.001 % per sample, and less after the 10-sample mean. × 9.3 that is ≤ 0.01 SLPM, at the MFC's resolution, so the high gain is noise-safe.
+- These are **starting points for the bump tests, not final values**. Treat them as an upper bound on aggressiveness until 6.2 is done.
+- **Handoff transient.** At handoff the sensor still reads ~0.15 % high and settles over ~1 min (2.1.5). The loop will see O2 falling below target just after FBON = 1 and trim the flow down.
+  That is harmless, but it is not a disturbance: consider holding FBON off for ~2 min after the handoff flow is reached.
+
+### 6.0.1 Bump-test duration (DERIVED; changes 6.1)
+
+- With τ = 169 min (mode A) and 53 min (mode B), "wait until O2 is flat again (30–60 min)" is not achievable: a flat settle needs ~3τ, i.e. 8 h and 2.7 h.
+- **Instead, identify the process as integrating.** After a flow step ΔF, O2 bends away from its previous trend after θ (~80–95 s). Its new slope is ΔdC/dt ≈ −ΔF·C/V (mode A). Read k' and θ from 20–30 min of data. That is enough for SIMC.
+- A full settle is only needed to confirm K. Mode B's K includes the flow-dependence of its ingress, so it is worth one long step.
+
 ### 6.1 Bump test (per mode, feedback off)
 
 1. Settle at the mode's flow until O2 is flat within 0.01 % over 10 min.
 2. Log time, setpoint and O2 at 1 Hz throughout.
-3. Step the flow up by ~15 % (at least 0.03 SLPM). Wait until O2 is flat again (30–60 min).
+3. Step the flow up by ~15 % (at least 0.03 SLPM). Record 20–30 min and fit θ and the new slope, treating the process as integrating (6.0.1).
+   A flat settle takes ~3τ: 8 h in mode A, 2.7 h in mode B.
 4. Step back down and wait again.
 5. Read off gain K, dead time θ and time constant τ. Then:
    - Kc = τ / (|K|·(τc + θ))
@@ -318,6 +506,21 @@ Per-mode parameters (base flow, `KP`, `KI`, `DRVH`, alarm multipliers) are autos
    - Scripted scenarios cover every row of the end-state table: normal purge, open lid at
      start, lid opened in REGULATE, analyzer freeze, MFC hold, bad ramp rates, empty cylinder,
      IOC restart mid-REGULATE.
+   - **Simulator parameters (MEASURED, 2.1):**
+     - Volume: V = 41 L.
+     - Ingress: J_A = 2.6·F^0.04 and J_B = 7.1·F^−0.87 mL O2/min. Draw a per-closure seal factor from ×/÷1.3.
+     - Flow off: k = 0.00142 /min toward ambient (use for both lids until B is measured).
+     - Transport delay: 80 s at hold flow, 10 s at 20 SLPM.
+     - Sensor-zone lag: first-order, τ = 65 s, applied to the bulk C.
+     - Lid lift: exponential to ambient with τ = 5.75 s.
+     - Ambient: 19.5 % relaxing to 19.2 % over 1.5 h, plus an occasional −0.6 % dip lasting ~1 min.
+     - Noise: 0.001 % per sample.
+   - **Extra scenarios from the data:**
+     - Operator Flow Zero with the lid kept on for 22 min (must not trip the lid detector).
+     - A lift 76 s after Flow Zero, open 2 min, then Purge (24 Sep 11:52).
+     - Collimator lid regulated at the normal-lid flow (O2 climbs slowly; flow-high alarm, not OPEN_STOP).
+     - Flow off for 7 h, lid on (O2 creeps past 10 %; must not trip OPEN_STOP).
+   - **Validation target:** the simulator must replay the archived 24 Sep 10 s windows (00:59–04:59, 05:46–13:46) within a few % when fed the recorded flow.
 2. **SNL build.** Compile with `snc` in a real synApps build. Nothing is declared done until it
    compiles and passes the bench.
 3. **Hardware, supervised.**
@@ -332,12 +535,18 @@ Per-mode parameters (base flow, `KP`, `KI`, `DRVH`, alarm multipliers) are autos
    autosave, or a new soft IOC. Decides the build and who maintains it.
 2. **PV prefix `$(PP)`.** Needs approval before any record is created.
 3. **Owner sign-off** for writes to Alicat `Setpoint`, `RampRate` and `Run`.
-4. **PROVISIONAL values to confirm on hardware:**
-   - `MinDrop`: 1.0 %
-   - ambient O2: 19.4 %
-   - lid threshold: 10 % for 5 s
-   - lid rise rate `LidSlope`: 0.2 %/s
-   - flow-mismatch tolerance
-   - PID ceiling
-   - gains
-   - Alicat ramp-rate-0 semantics
+4. **PROVISIONAL values to confirm on hardware** (status after the 2.1 data):
+   - `MinDrop` 1.0 %: a closed box drops 6.8–7.4 %. **Still needs the open-box purge measured.**
+   - Ambient O2 19.4 %: **MEASURED** 19.0–19.6 %, relaxing after a lift; a model value of 19.4 % is fine.
+   - Lid threshold 10 % for 5 s: **supported** (4.6.1; n=2 lifts, normal lid).
+   - `LidSlope` 0.2 %/s: **supported**, 7× below lifts and 51× above sealed (n=2, normal lid).
+   - Flow-mismatch tolerance: open.
+   - PID ceiling: open.
+   - Gains: model starting values in 6.0, 10–20× the provisional `KP`. Confirm by bump test.
+   - Alicat ramp-rate-0 semantics: open.
+5. **Purge timeout vs Δ** (4.2): with target 0.99 % and Δ 0.15 %, reaching target − Δ from air takes 6.4–6.6 min, about the 6.5 min timeout. Raise the timeout (~7.5 min), reduce Δ, or accept the routine alarm.
+6. **Setpoint_RBV reliability** (2.1.9): the archiver shows it missing 25 of 41 purges and one flow-off, and reading mid-ramp values.
+   Before relying on the flow-mismatch rule (5.1), confirm with the IOC owner whether the PV itself or only its archiving misses events. If the PV misses them, compare `Flow_RBV` against the value the sequencer last wrote instead.
+7. **Mode-B expected flow**: adopt the exponent n = 0.53 (5.2) or keep the linear rule and let the PID absorb the error.
+8. **Collimator-lid fast data**: no 10 s record exists for mode B. Capture one lift and one purge at 10 s (or 1 Hz) before finalising mode-B thresholds.
+9. **Archiving**: record `15IDC:D1Dmm_calc` and `Flow_RBV` at ≤ 10 s, and the setpoint command (not only the RBV). The 600 s archive missed a whole lid cycle.
