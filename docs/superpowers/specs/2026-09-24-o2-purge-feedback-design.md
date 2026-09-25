@@ -1,7 +1,9 @@
 # Helium purge with O2 feedback: design
 
 - **Date:** 2026-09-24, last updated 2026-09-25.
-- **Status:** design under review. No code has been written. No PV has been created or written.
+- **Status:** design approved as frozen in simulator tag `sim-v1.0`. The implementation
+  specification for the IOC is `docs/ioc/15LSS_sample_gas_IOC_spec.md` (2026-09-25). No IOC
+  code has been written. No PV has been created or written.
 - **Measured data:** enclosure physics from the 17–24 Sep 2026 archiver data were added on
   2026-09-24 (section 2.1). Values they confirm or replace are tagged MEASURED where they appear.
 - **Decided 2026-09-25:**
