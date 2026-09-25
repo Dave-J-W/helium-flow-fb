@@ -611,7 +611,14 @@ hold, lid and purge alarms have their own timing and are not gated.
   the run.
   - The run **ends at the first flow-zero after its last purge**. If there is none, it ends at
     the last purge.
-  - It counts as finished once no purge follows for `runGap` (24 h).
+  - It counts as finished once no purge follows for `runGap` = **60 h** (REVISED 2026-09-25).
+    - **Why 60 h:** the beam has 24 h and 48 h downtimes after which the same user resumes, and
+      users may take up to ~10 h to start a purge after the beam returns.
+    - **Measured from the flow-zero** that ended the segment (beam down), not from the last purge.
+      Otherwise the hours between the last purge and the beam loss would push a 48 h downtime
+      over the limit.
+  - **"Mark start of new user run"** (Admin) splits runs at a user changeover, whatever the gap.
+    It is needed when a new user starts within 60 h of the previous one.
   - Per run: start, end, number of purges, litres (exact, from the boundary events) and cylinder
     changes.
 - **Report window:** `reportDays` (60) **ending at the end of the latest user run**, so idle
@@ -622,8 +629,12 @@ hold, lid and purge alarms have their own timing and are not gated.
   - cylinder-equivalents (litres ÷ `cylCapacityL`)
   - the run table
 - **Where it appears:** Admin screen ("Helium usage report").
-- **Simulator check:** three runs over 14 days (2524, 2524 and 1261 L). Dispensed = sum of runs
-  = Alicat totalizer = 6309 L, with 0 L outside runs (flow is at zero between runs).
+- **Simulator check (scenario 19):**
+  - **User A:** days 0–3, a 48 h downtime, resuming 10 h after beam return, until day 8. This
+    stays **one run**: 23 purges, 4777 L.
+  - **User B:** after a marked changeover, days 8.5–11 with a cylinder change: 2103 L.
+  - **User C:** after 3.5 idle days, split automatically: 841 L.
+  - **Totals:** dispensed = sum of runs = Alicat totalizer = 7721 L.
 
 ### 5.2 Expected flow
 

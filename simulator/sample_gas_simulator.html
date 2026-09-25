@@ -258,7 +258,8 @@ function defaultControllerParams() {
     cylCapacityL: 8000,    // usable litres of He in a full cylinder (forecast works from Alicat Total_RBV, no pressure PV needed)
     cylWarnH: 24, cylAlarmH: 6,   // h, forecast (median over windows) below these → MINOR / MAJOR
     reportDays: 60,        // helium-usage report window, ending at the end of the latest user run
-    runGap: 86400,         // s without a purge after which a user run counts as finished
+    runGap: 216000,        // s (60 h) without a purge after which a user run counts as finished: covers 48 h beam
+                           // downtimes plus ~10 h before the user's next purge (user, 2026-09-25). "Mark new user run" splits earlier.
     handoffHold: 5, handoffFlowTol: 0.05, fbDelay: 0,   // feedback delay 120 → 0 s (user, 2026-09-25)
     lidLevel: 10, lidFilter: 5, lidSlope: 0.2, lidSlopeWindow: 60, lidArmLevel: 9,
     rampMaxPurge: 5, rampMinHandoff: 2,
@@ -638,14 +639,21 @@ class Controller {
       const first = grp[0], last = grp[grp.length - 1];
       const nextPurge = purges.find(e => e.t > last.t);
       const zero = ev.find(e => e.type === 'zero' && e.t > last.t && (!nextPurge || e.t < nextPurge.t));
-      const finished = !!nextPurge || this.now - last.t > p.runGap;
+      const finished = !!nextPurge || this.now - (zero ? zero.t : last.t) > p.runGap || marks.some(m => m.t > last.t);
       const end = zero ? zero : (finished ? last : null);
       const endL = end ? end.L : this.cumL;
       runs.push({ start: first.t, end: end ? end.t : null, purges: grp.length, L: endL - first.L, startL: first.L, endL,
                   cylinders: ev.filter(e => e.type === 'cylinder' && e.t >= first.t && e.t <= (end ? end.t : this.now)).length, finished });
       grp = [];
     };
-    for (const e of purges) { if (grp.length && e.t - grp[grp.length - 1].t > p.runGap) close(); grp.push(e); }
+    const marks = ev.filter(e => e.type === 'newrun');
+    // idle gap is measured from the first flow-zero after a purge (e.g. beam down), not from the purge itself
+    const segEnd = (pu, before) => { const z = ev.find(q => q.type === 'zero' && q.t > pu.t && (before == null || q.t < before)); return z ? z.t : pu.t; };
+    for (const e of purges) {
+      const prev = grp.length ? grp[grp.length - 1] : null;
+      if (prev && (e.t - segEnd(prev, e.t) > p.runGap || marks.some(m => m.t > prev.t && m.t <= e.t))) close();
+      grp.push(e);
+    }
     close();
     const lastRun = runs.length ? runs[runs.length - 1] : null;
     const wEnd = lastRun ? (lastRun.end ?? this.now) : this.now, wStart = wEnd - p.reportDays * 86400;
@@ -1067,14 +1075,16 @@ const SCENARIOS = [
     events: (() => { const e = []; for (let k = 0; k < 16; k++) { const t0 = 3600 + k * 6 * 3600;
       e.push(act(t0, 'Flow Zero before opening', s => s.ctl.opFlowZero()), act(t0 + 60, 'lid lifted', s => s.plant.liftLid()),
              act(t0 + 660, 'lid closed', s => s.plant.closeLid()), act(t0 + 700, 'Purge', s => s.ctl.opPurge())); } return e; })() },
-  { name: '19. Helium ledger: three user runs over 14 days',
-    desc: 'Three user runs separated by idle periods with the flow at zero: run 1 days 0–3, run 2 days 5–8 (new cylinder on day 6), run 3 days 11–12.5. Sample changes every 6 h within a run (Flow Zero, lid off 10 min, Purge).\nOpen Admin → "Helium usage report": each run with its purges and litres; the report window ends at the first flow-zero after the last purge of run 3. Run at 3000×.',
+  { name: '19. Helium ledger: three users, a 48 h downtime, a marked changeover',
+    desc: 'User A: days 0–3, then a 48 h beam downtime (flow at zero), resumes 10 h after the beam returns (day 5.4) until day 8 → ONE run.\nChangeover: admin presses "Mark start of new user run" at day 8.1. User B: days 8.5–11 (new cylinder on day 9.5).\nIdle until user C at day 14.5 (> 60 h after B\'s last purge → split automatically), until day 15.5.\nSample changes every 6 h within a run. Open Admin → "Helium usage report". Run at 3000×.',
     setup: s => { s.ctl.newCylinder('scenario'); },
-    events: (() => { const e = []; const run = (d0, d1) => { for (let t = d0 * 86400 + 300; t < d1 * 86400; t += 6 * 3600) {
+    events: (() => { const e = []; const run = (d0, d1) => { for (let t = Math.round(d0 * 86400) + 300; t < d1 * 86400; t += 6 * 3600) {
         e.push(act(t, 'Flow Zero', s => s.ctl.opFlowZero()), act(t + 60, 'lid lifted', s => s.plant.liftLid()),
                act(t + 660, 'lid closed', s => s.plant.closeLid()), act(t + 700, 'Purge', s => s.ctl.opPurge())); }
-        e.push(act(d1 * 86400, 'end of user run: Flow Zero', s => s.ctl.opFlowZero())); };
-      run(0, 3); run(5, 8); run(11, 12.5); e.push(act(6 * 86400 + 1000, 'new cylinder fitted', s => { s.plant.cylP = s.pp.cylP0; s.ctl.newCylinder('operator'); }));
+        e.push(act(Math.round(d1 * 86400), 'Flow Zero (beam down / end of run)', s => s.ctl.opFlowZero())); };
+      run(0, 3); run(5 + 10 / 24, 8); run(8.5, 11); run(14.5, 15.5);
+      e.push(act(Math.round(8.1 * 86400), 'admin marks start of a new user run', s => s.ctl.ledgerEvent('newrun')));
+      e.push(act(Math.round(9.5 * 86400) + 1000, 'new cylinder fitted', s => { s.plant.cylP = s.pp.cylP0; s.ctl.newCylinder('operator'); }));
       return e.sort((a, b) => a.t - b.t); })() },
   { name: '18. Collimator lid, mode B, normal purge',
     desc: 'Collimator lid and mode B selected. Purge from air.\nExpect: handoff at ~0.84 SLPM expected flow, regulation near 0.99 % with shorter time constants (τ ≈ 53 min).',
@@ -1210,7 +1220,7 @@ const DEEP_FIELDS = [
   F('lidCurvMin', 'Lid check: open if decay levels off (2nd/1st-half rate) below', '', 0.1, 1, 0.05),
   F('cylCapacityL', 'Usable He in a full cylinder (run-out forecast)', 'L', 100, 50000, 100),
   F('reportDays', 'Helium usage report window', 'days', 1, 365, 1, true),
-  F('runGap', 'User run closes after no purge for', 's', 3600, 30 * 86400, 3600, true),
+  F('runGap', 'User run closes after no purge for (Admin can also mark a new run)', 's', 3600, 30 * 86400, 3600, true),
   F('openSlopeFrac', 'Lid check: open if decay < this fraction of F/V', '', 0.05, 0.95, 0.05),
   F('dropSkipLevel', 'Lid check skipped if purge starts below', '%', 1, 21, 0.1),
   F('handoffHold', 'Handoff: lag-corrected O2 below target−Δ for', 's', 1, 120, 1, true),
@@ -1321,7 +1331,7 @@ function renderModal() {
     body += '<h4>PID gains and limits per enclosure mode</h4>' + modeTable(ADMIN_MODE_FIELDS);
     body += `<h4>Overrides (automatic corrections): count = <span id="ovCount">${c.overrideCount}</span> <button id="ovReset">reset count</button></h4>`;
     body += `<div class="internals" id="ovList" style="max-height:120px;overflow:auto"></div>`;
-    body += `<h4>Helium usage report (window ends at the end of the latest user run)</h4><div class="internals" id="usage"></div>`;
+    body += `<h4>Helium usage report (window ends at the end of the latest user run) <button id="newRun">Mark start of new user run</button></h4><div class="internals" id="usage"></div>`;
     body += '<h4>Live internals (read-only)</h4><div class="internals" id="internals"></div>';
     body += `<div class="note">Assumption to verify on the real IOC: epid writes OUTL every scan while FBON = 1, so an unchanged output is re-sent every scan. The hold monitor re-sends explicitly either way.</div>`;
     body += '<div style="margin-top:8px"><button id="toDeep">Deep admin settings…</button> <button id="relIdle">Release control (→ IDLE)</button></div>';
@@ -1339,6 +1349,7 @@ function renderModal() {
   if ($('toAdmin')) $('toAdmin').onclick = () => { modalLevel = 'admin'; renderModal(); };
   if ($('relIdle')) $('relIdle').onclick = () => st.ctl.opIdle();
   if ($('ovReset')) $('ovReset').onclick = () => { st.ctl.overrideCount = 0; st.log(0, 'settings: override count reset'); };
+  if ($('newRun')) $('newRun').onclick = () => { st.ctl.ledgerEvent('newrun'); st.log(0, 'admin: start of a new user run marked'); };
 }
 function updateModalLive() {
   if (modalLevel !== 'admin') return;
@@ -1358,7 +1369,7 @@ function updateModalLive() {
       `last ${c.p.reportDays} days (${d(Math.max(0, u.wStart))} → ${d(u.wEnd)}):\n` +
       `  helium dispensed   ${fmtN(u.dispensed, 0)} L  (${fmtN(u.inRuns, 0)} L during user runs)\n` +
       `  cylinders fitted   ${u.cyls}    cylinder-equivalents used  ${fmtN(u.cylEquiv, 2)}  (at ${c.p.cylCapacityL} L each)\n` +
-      `user runs (end = first flow-zero after the last purge; a run closes after ${fmtT(c.p.runGap)} with no purge):\n` +
+      `user runs (end = first flow-zero after the last purge; a run closes after ${fmtDur(c.p.runGap / 3600)} with no purge, or at a "new user run" mark):\n` +
       (u.runs.length ? u.runs.map((r, i) => `  #${i + 1}  ${d(r.start)} → ${r.end == null ? 'in progress' : d(r.end)}   ${String(r.purges).padStart(3)} purges   ${fmtN(r.L, 0).padStart(6)} L   ${r.cylinders ? r.cylinders + ' cylinder change(s)' : ''}${r.finished ? '' : '  (open)'}`).join('\n') : '  (no purges yet)');
   }
   if ($('ovCount')) $('ovCount').textContent = c.overrideCount;
