@@ -108,7 +108,7 @@
         <div class="ro" id="roO2Box"><div class="lbl">Oxygen</div><div class="val" id="roO2">–</div><div class="unit">% O2</div><div class="extra" id="roO2x"></div></div>
         <div class="ro" id="roFlowBox"><div class="lbl">Helium flow</div><div class="val" id="roFlow">–</div><div class="unit">SLPM (Flow_RBV)</div><div class="extra" id="roFlowx"></div></div>
         <div class="ro" id="roSPBox"><div class="lbl">Flow setpoint</div><div class="val" id="roSP">–</div><div class="unit">SLPM (Setpoint_RBV)</div><div class="extra" id="roSPx"></div></div>
-        <div class="ro" id="roCylBox"><div class="lbl">Cylinder pressure</div><div class="val" id="roCyl">–</div><div class="unit">psi</div><div class="extra" id="roCylx"></div></div>
+        <div class="ro" id="roCylBox"><div class="lbl">Helium cylinder</div><div class="val" id="roCyl">–</div><div class="unit" id="roCylUnit">L left (from MFC totalizer)</div><div class="extra" id="roCylx"></div></div>
       </div>
       <div class="stateRow">State <span class="badge" id="stateBadge">–</span>
         <span class="led" id="ledRange"></span><span id="rangeTxt">in range</span></div>
@@ -124,6 +124,7 @@
         <button class="resume" id="btnResume">Resume PID</button>
       </div>
       <div class="small">Last action: <span id="lastAction"></span></div>
+      <button class="adminBtn" id="btnNewCyl" title="Press after fitting a full helium cylinder: restarts the usage count and run-out forecast">New He cylinder fitted</button>
       <button class="adminBtn" id="btnAdmin">Admin settings…</button>
     </div>
     <div class="note">This column is the <b>user main panel</b> (spec §7.0). The graphs are its trend plot, enlarged.
@@ -163,7 +164,7 @@
         <label>Gas <select id="wGas"><option>He</option><option>Air</option><option>N2</option></select></label></div>
       <h4>Helium cylinder</h4>
       <div class="row"><button id="wRefill">Refill (2000 psi)</button><button id="wLow">Nearly empty (120 psi)</button><button id="wEmpty">Empty</button>
-        <label><input type="checkbox" id="wCylPv" checked> cylinder PV exists</label></div>
+        <label><input type="checkbox" id="wCylPv"> cylinder pressure PV exists</label></div>
       <h4>O2 analyzer</h4>
       <div class="row"><label><input type="radio" name="an" value="normal" checked> normal</label>
         <label><input type="radio" name="an" value="frozen"> frozen value</label>
@@ -217,6 +218,7 @@ function fmtT(s) {
   return `${h}:${String(m).padStart(2, '0')}:${String(x).padStart(2, '0')}`;
 }
 const fmtN = (v, d = 2) => (v == null || !isFinite(v)) ? '–' : Number(v).toFixed(d);
+const fmtDur = h => (h == null || !isFinite(h)) ? '–' : h < 48 ? `${h.toFixed(h < 10 ? 1 : 0)} h` : `${(h / 24).toFixed(1)} d`;
 const SEV_NAME = ['', 'MINOR', 'MAJOR', 'INVALID'];
 
 const STATES = {
@@ -237,7 +239,7 @@ const STATE_KEYS = Object.keys(STATES);
 // =====================================================================================
 function defaultControllerParams() {
   return {
-    target: 0.99, tol: 0.02, delta: 0.01, mode: 'A',          // Δ 0.15 → 0.01 (user, 2026-09-25)
+    target: 0.99, tol: 0.02, delta: -0.04, mode: 'A',         // Δ 0.15 → 0.01 → −0.04 (hand off 0.04 % above target; user, 2026-09-25)
     purgeLag: 12,          // s, analyzer lag at purge flow (transport ~10 s + sensor zone); handoff uses the lag-corrected O2. 0 = off
     modes: {
       A: { name: 'Normal lid', baseFlow: 0.25, n: 1.0, KP: -9.3, KI: 8.8e-4, drvh: 1.0, drvl: 0.05 },
@@ -248,9 +250,13 @@ function defaultControllerParams() {
     purgeTimeoutMin: 120, purgeTimeoutMax: 1800,   // s, clamps
     ambientRef: 19.4,          // % O2 assumed at purge start when the analyzer is unavailable (blind purge)
     V: 41,                 // L, enclosure volume: sets the lid-on purge decay rate F/V
-    kinT1: 20,             // s after full flow: start of the decay-rate window
-    dropCheckTime: 60,     // s after full flow: end of the window, where the lid decision is made
-    openSlopeFrac: 0.5,    // lid judged open if the measured decay rate < this fraction of F/V
+    lidOnsetFrac: 0.02,    // decay onset = first reading 2 % (relative) below the purge-start O2
+    lidOnsetMax: 30,       // s after full flow; no onset by then = no decay = lid open
+    lidWindow: 15,         // s of decay after onset used to measure the rate
+    openSlopeFrac: 0.5,    // lid judged open if the measured decay rate < this fraction of F/V ...
+    lidCurvMin: 0.8,       // ... or if the decay levels off: 2nd-half rate / 1st-half rate below this (lid on ≈ 1.0–1.1)
+    cylCapacityL: 8000,    // usable litres of He in a full cylinder (forecast works from Alicat Total_RBV, no pressure PV needed)
+    cylWarnH: 24, cylAlarmH: 6,   // h, forecast (median over windows) below these → MINOR / MAJOR
     handoffHold: 5, handoffFlowTol: 0.05, fbDelay: 0,   // feedback delay 120 → 0 s (user, 2026-09-25)
     lidLevel: 10, lidFilter: 5, lidSlope: 0.2, lidSlopeWindow: 60, lidArmLevel: 9,
     rampMaxPurge: 5, rampMinHandoff: 2,
@@ -311,10 +317,10 @@ class Plant {
     this.histLen = Math.ceil(200 / DT);
     this.hist = new Float64Array(this.histLen).fill(amb); this.hi = 0;
     this.dEff = pp.delayMax; this.delayed = amb;
-    this.a = { spVal: 0, spDev: 0, spRamped: 0, flow: 0, running: true, stuck: false, holdFlow: 0, ramp: 3, gas: 'He' };
-    this.cylP = pp.cylP0; this.cylPresent = true;
+    this.a = { spVal: 0, spDev: 0, spRamped: 0, flow: 0, running: true, stuck: false, holdFlow: 0, ramp: 3, gas: 'He', total: 0 };
+    this.cylP = pp.cylP0; this.cylPresent = false;   // the cylinder-pressure PV does not exist yet
     this.an = { mode: 'normal', value: amb, sevr: 0 };
-    this.rbv = { flow: 0, sp: 0, running: true, ramp: 3, gas: 'He', units: 'SLPM' };
+    this.rbv = { flow: 0, sp: 0, running: true, ramp: 3, gas: 'He', units: 'SLPM', total: 0 };
   }
   ambient() {
     const pp = this.pp;
@@ -344,6 +350,7 @@ class Plant {
     a.flow += (tgt - a.flow) * Math.min(1, dt / pp.alicatTau);
     if (a.flow < 1e-4) a.flow = 0;
     this.cylP = Math.max(0, this.cylP - a.flow * dt / 60 / pp.cylLitersPerPsi);
+    a.total += a.flow * dt / 60;               // Alicat totalizer, standard litres
     // --- Enclosure O2 (well-mixed bulk, spec §2.1.1)
     const F = a.flow, V = pp.V, amb = this.ambient();
     let dC;
@@ -377,6 +384,7 @@ class Plant {
   pollAlicat() {                             // stream poll: Flow_RBV, Setpoint_RBV, Running_RBV, RampRate_RBV, Gas_RBV
     const a = this.a, r = this.rbv;
     r.flow = Math.round(a.flow * 100) / 100; r.sp = a.spDev; r.running = a.running; r.ramp = a.ramp; r.gas = a.gas;
+    r.total = Math.round(a.total * 100) / 100;   // Total_RBV
   }
   // ---- Channel Access puts from the controller
   putSetpoint(v) {                           // Setpoint record has SDIS=Running_RBV, DISV=0
@@ -420,6 +428,9 @@ class Controller {
   constructor(st) {
     this.st = st; this.p = defaultControllerParams();
     this.overrideCount = 0; this.overrides = [];
+    // Cylinder usage log: litres used since "New He cylinder", from the Alicat totalizer (Total_RBV), sampled every
+    // 60 s. Kept across IOC restarts (in the IOC: an autosaved waveform plus the autosaved totalizer baseline).
+    this.cylBase = null; this.cylHist = []; this.cylEst = []; this.cylMedianH = null; this.cylLeftL = null;
     this.reinit(); this.enter('IDLE', 'IOC started');
   }
   get plant() { return this.st.plant; }
@@ -523,7 +534,7 @@ class Controller {
       case 'PRECHECK':
         this.clearAlarm('openStop', true); this.clearAlarm('purgeInc', true); break;
       case 'PURGE':
-        Object.assign(this.sd, { o2Start: this.o2, timerT0: null, dropChecked: false, below: 0, elapsed: 0, c1: null, kin: null });
+        Object.assign(this.sd, { o2Start: this.o2, timerT0: null, dropChecked: false, below: 0, elapsed: 0, onsetT: null, cOn: null, kin: null });
         this.lidArmed = false; this.command(p.purgeFlow); break;
       case 'HANDOFF': {
         const r = this.rbv;
@@ -559,6 +570,7 @@ class Controller {
         case 'OPEN_LOOP': this.command(this.expectedFlow()); break;
       }
     }
+    this.cylForecast();
     this.alarmChecks();
   }
   readInputs() {
@@ -590,6 +602,39 @@ class Controller {
     return false;
   }
   stopOpen(msg) { this.enter('OPEN_STOP', msg); this.setAlarm('openStop', 2, msg); }
+  newCylinder(who) {                           // operator: "New He cylinder" — re-baseline the totalizer reading
+    this.cylBase = this.rbv.total; this.cylHist = [];
+    this.clearAlarm('cylLow', true);
+    this.st.log(0, `${who}: new He cylinder fitted (${this.p.cylCapacityL} L usable); usage counted from Total_RBV = ${fmtN(this.cylBase, 1)} L`);
+  }
+  cylForecast() {                              // §5.5: run-out estimate from helium usage, several data windows
+    const p = this.p, r = this.rbv;
+    if (this.cylBase == null) this.cylBase = r.total;                        // first start: assume a full cylinder
+    if (r.total < this.cylBase - 1) { this.st.log(1, 'Alicat totalizer went backwards (reset?): usage re-baselined'); this.cylBase = r.total - (this.cylHist.length ? this.cylHist[this.cylHist.length - 1].used : 0); }
+    const used = r.total - this.cylBase;
+    this.cylLeftL = Math.max(0, p.cylCapacityL - used);
+    if (this.now % 60 !== 0) return;
+    this.cylHist.push({ t: this.now, used });
+    while (this.cylHist.length && this.cylHist[0].t < this.now - 4 * 86400) this.cylHist.shift();
+    const span = this.now - this.cylHist[0].t;
+    this.cylEst = [3, 2, 1, 0.5, 0.25].map(days => {
+      const w = days * 86400;
+      if (span < 0.9 * w) return { days, h: null, why: 'not enough data yet' };
+      const pts = this.cylHist.filter(q => q.t >= this.now - w);
+      const n = pts.length, mt = pts.reduce((a, q) => a + q.t, 0) / n, mu = pts.reduce((a, q) => a + q.used, 0) / n;
+      let sxy = 0, sxx = 0; for (const q of pts) { sxy += (q.t - mt) * (q.used - mu); sxx += (q.t - mt) ** 2; }
+      const rate = sxx > 0 ? sxy / sxx : 0;                                   // L/s (least-squares usage rate)
+      if (this.cylLeftL <= 0) return { days, h: 0, rate: rate * 86400 };
+      if (rate <= 1e-6) return { days, h: null, why: 'no usage', rate: rate * 86400 };
+      return { days, h: this.cylLeftL / rate / 3600, rate: rate * 86400 };    // hours, L/day
+    });
+    const hs = this.cylEst.filter(e => e.h != null).map(e => e.h).sort((a, b) => a - b);
+    this.cylMedianH = hs.length ? hs[Math.floor((hs.length - 1) / 2)] : null;
+    const m = this.cylMedianH;
+    if (m != null && m < p.cylAlarmH) this.setAlarm('cylLow', 2, `helium cylinder empty in < ${p.cylAlarmH} h (forecast)`);
+    else if (m != null && m < p.cylWarnH) this.setAlarm('cylLow', 1, `helium cylinder empty in < ${p.cylWarnH} h (forecast)`);
+    else this.clearAlarm('cylLow');
+  }
   holdMonitor() {                              // §4.6.2
     const p = this.p, r = this.rbv;
     if (!r.running) {
@@ -633,18 +678,33 @@ class Controller {
     if (this.blind) { if (el >= sd.timeout) this.enter('OPEN_LOOP', 'blind purge complete'); return; }
     // Lid inference from purge kinetics (§4.2): with the lid on, O2 decays as exp(−F·t/V).
     // With the lid open the helium rises away and the decay is at least 2× slower.
-    if (sd.timerT0 != null && sd.c1 == null && el >= p.kinT1) sd.c1 = this.o2;
-    if (!sd.dropChecked && el >= p.dropCheckTime) {
-      sd.dropChecked = true;
-      if (sd.o2Start >= p.dropSkipLevel) {
-        const kExp = p.purgeFlow / p.V / 60;                                            // 1/s, lid on
-        const kObs = (sd.c1 > 0 && this.o2 > 0) ? Math.log(sd.c1 / this.o2) / (p.dropCheckTime - p.kinT1) : 0;
-        const ratio = kObs / kExp; sd.kin = ratio; sd.kObs = kObs; sd.checkAt = el; sd.cCheck = this.o2;
-        if (ratio < p.openSlopeFrac) {
-          this.stopOpen(`purge decay only ${fmtN(100 * ratio, 0)} % of the lid-on rate: enclosure open?`); return;
+    // Onset-based: wait for the decay to start (first reading lidOnsetFrac below the start), then measure the rate
+    // over lidWindow s. The window starts wherever the decay starts, so transport-delay uncertainty does not matter.
+    if (!sd.dropChecked && sd.timerT0 != null) {
+      if (!(sd.o2Start >= p.dropSkipLevel)) {
+        sd.dropChecked = true; sd.kin = 'skipped';
+        this.st.log(0, `lid check skipped: purge started at ${fmtN(sd.o2Start)} % (< ${p.dropSkipLevel} %)`);
+      } else {
+        if (sd.onsetT == null && this.o2 <= sd.o2Start * (1 - p.lidOnsetFrac)) { sd.onsetT = el; sd.cOn = this.o2; }
+        if (sd.onsetT == null && el >= p.lidOnsetMax) {
+          sd.dropChecked = true; sd.kin = 0;
+          this.stopOpen(`no O2 decay within ${p.lidOnsetMax} s of full flow: enclosure open?`); return;
         }
-        this.st.log(0, `lid check passed: purge decay ${fmtN(100 * ratio, 0)} % of the lid-on rate (open below ${fmtN(100 * p.openSlopeFrac, 0)} %)`);
-      } else { sd.kin = 'skipped'; this.st.log(0, `lid check skipped: purge started at ${fmtN(sd.o2Start)} % (< ${p.dropSkipLevel} %)`); }
+        if (sd.onsetT != null && el >= sd.onsetT + p.lidWindow) {
+          sd.dropChecked = true;
+          const kExp = p.purgeFlow / p.V / 60;                                            // 1/s, lid on
+          const span = el - sd.onsetT, half = Math.floor(span / 2), n = this.o2hist.length;
+          const cMid = this.o2hist[n - 1 - (span - half)];
+          const kObs = Math.log(sd.cOn / this.o2) / span;
+          const k1 = Math.log(sd.cOn / cMid) / half, k2 = Math.log(cMid / this.o2) / (span - half);
+          const ratio = kObs / kExp, curv = k1 > 0 ? k2 / k1 : 0;
+          sd.kin = ratio; sd.curv = curv; sd.kObs = kObs; sd.checkAt = el; sd.cCheck = this.o2;
+          if (ratio < p.openSlopeFrac || curv < p.lidCurvMin) {
+            this.stopOpen(`purge decay ${fmtN(100 * ratio, 0)} % of the lid-on rate, curvature ${fmtN(curv, 2)}: enclosure open?`); return;
+          }
+          this.st.log(0, `lid check passed at ${el} s: decay ${fmtN(100 * ratio, 0)} % of the lid-on rate (open < ${fmtN(100 * p.openSlopeFrac, 0)} %), curvature ${fmtN(curv, 2)} (open < ${p.lidCurvMin})`);
+        }
+      }
     }
     // Lag-compensated handoff: the reading trails the bulk by ~purgeLag s while O2 falls at rate k,
     // so the bulk is ≈ reading × exp(−k·lag). k is the decay rate measured by the lid check (else F/V).
@@ -823,7 +883,7 @@ class Station {
     h.flow.push(pl.rbv.flow);
     h.cmd.push(c.down || c.lastCmd == null ? NaN : c.lastCmd);
     h.sp.push(pl.rbv.sp);
-    h.cyl.push(pl.cylP);
+    h.cyl.push(c.cylLeftL == null ? NaN : c.cylLeftL);
     h.state.push(STATE_KEYS.indexOf(c.state));
     h.drvh.push(c.state === 'REGULATE' ? c.epid.DRVH : NaN);
     if (h.t.length > HIST_CAP) for (const k in h) h[k].splice(0, 10000);
@@ -832,6 +892,7 @@ class Station {
     for (let i = LOG.length - 1; i >= 0; i--) if (LOG[i].st === this.name) LOG.splice(i, 1);
     logVersion++;
     this.steps = 0; this.plant.reset(); this.ctl.reinit(); this.ctl.enter('IDLE', 'station reset');
+    Object.assign(this.ctl, { cylBase: null, cylHist: [], cylEst: [], cylMedianH: null, cylLeftL: null });
     if (this.lidLinked) this.plant.lidType = this.ctl.p.mode;   // box keeps the lid that matches the selected mode
     this.hist = this.newHist(); this.scenario = null;
   }
@@ -943,7 +1004,13 @@ const SCENARIOS = [
     desc: 'Regulated; at 300 s the operator changes the target to 0.50 %.\nExpect: the PID raises flow toward ~0.51 SLPM (mode A); slow approach given τ ≈ 169 min.',
     setup: s => s.presetRegulating(),
     events: [act(300, 'operator sets target 0.50 %', s => s.ctl.setTarget(0.5, 'operator'))] },
-  { name: '17. Collimator lid, mode B, normal purge',
+  { name: '17. Cylinder run-out forecast: 4 days of use (lid cycle every 6 h)',
+    desc: 'New cylinder, then 4 days of use: regulation at 0.99 % with a Flow Zero, a 10 min lid-off, and a purge every 6 h (normal lid).\nWatch the cylinder readout: litres left from the MFC totalizer, and the run-out range from the 0.25/0.5/1/2/3-day windows. The short windows swing with the purge cycle; the long ones converge. Admin → Live internals lists each window. Run at 3000×.',
+    setup: s => { s.presetRegulating(); s.ctl.newCylinder('scenario'); },
+    events: (() => { const e = []; for (let k = 0; k < 16; k++) { const t0 = 3600 + k * 6 * 3600;
+      e.push(act(t0, 'Flow Zero before opening', s => s.ctl.opFlowZero()), act(t0 + 60, 'lid lifted', s => s.plant.liftLid()),
+             act(t0 + 660, 'lid closed', s => s.plant.closeLid()), act(t0 + 700, 'Purge', s => s.ctl.opPurge())); } return e; })() },
+  { name: '18. Collimator lid, mode B, normal purge',
     desc: 'Collimator lid and mode B selected. Purge from air.\nExpect: handoff at ~0.84 SLPM expected flow, regulation near 0.99 % with shorter time constants (τ ≈ 53 min).',
     setup: s => { s.plant.lidType = 'B'; s.ctl.p.mode = 'B'; },
     events: [act(5, 'operator presses Purge', s => s.ctl.opPurge())] },
@@ -1054,7 +1121,8 @@ const ADMIN_FIELDS = [
   F('delta', 'Purge handoff margin Δ below target (negative = above target)', '%', -1, 1, 0.01),
   F('purgeFlow', 'Purge flow', 'SLPM', 1, 20, 0.5),
   F('purgeTimeoutMargin', 'Purge timeout = this × kinetic time to target − Δ', '×', 1, 3, 0.05),
-  F('dropCheckTime', 'Lid check: decision time after full flow', 's', 20, 300, 5, true),
+  F('cylWarnH', 'Cylinder forecast MINOR below', 'h', 1, 240, 1),
+  F('cylAlarmH', 'Cylinder forecast MAJOR below', 'h', 0.5, 120, 0.5),
   F('fbDelay', 'Feedback delay after handoff (sensor settling)', 's', 0, 600, 10, true),
   F('flowMinorX', 'Flow-high MINOR threshold', '× exp', 1.05, 5, 0.05),
   F('flowMajorX', 'Flow-high MAJOR threshold', '× exp', 1.1, 10, 0.05),
@@ -1070,7 +1138,11 @@ const ADMIN_MODE_FIELDS = [
 ];
 const DEEP_FIELDS = [
   F('V', 'Enclosure volume (sets the lid-on purge decay rate F/V)', 'L', 5, 200, 0.5),
-  F('kinT1', 'Lid check: decay-rate window starts after full flow', 's', 5, 120, 1, true),
+  F('lidOnsetFrac', 'Lid check: decay onset = drop of this fraction', '', 0.005, 0.2, 0.005),
+  F('lidOnsetMax', 'Lid check: no onset within this = open', 's', 10, 180, 5, true),
+  F('lidWindow', 'Lid check: decay measured over', 's', 4, 60, 1, true),
+  F('lidCurvMin', 'Lid check: open if decay levels off (2nd/1st-half rate) below', '', 0.1, 1, 0.05),
+  F('cylCapacityL', 'Usable He in a full cylinder (run-out forecast)', 'L', 100, 50000, 100),
   F('openSlopeFrac', 'Lid check: open if decay < this fraction of F/V', '', 0.05, 0.95, 0.05),
   F('dropSkipLevel', 'Lid check skipped if purge starts below', '%', 1, 21, 0.1),
   F('handoffHold', 'Handoff: lag-corrected O2 below target−Δ for', 's', 1, 120, 1, true),
@@ -1208,7 +1280,9 @@ function updateModalLive() {
     `expected flow ${fmtN(c.expectedFlow(), 3)} SLPM   last commanded ${fmtN(c.lastCmd, 3)} SLPM\n` +
     `lid detector: above-level ${c.aboveCount} s, max rise (60 s) ${fmtN(c.maxRate, 4)} %/s, armed-in-purge ${c.lidArmed}\n` +
     `hold monitor: on-hold ${c.holdSec} s, attempts ${c.holdAttempts}    O2 ok ${c.o2ok} frozen ${c.frozen}\n` +
-    `settling ${c.settling}  direction ${c.settleDir}  rate toward target ${fmtN(c.towardRate, 4)} %/min  no-progress ${c.stallSec} s`;
+    `settling ${c.settling}  direction ${c.settleDir}  rate toward target ${fmtN(c.towardRate, 4)} %/min  no-progress ${c.stallSec} s\n` +
+    `cylinder: ${fmtN(c.cylLeftL, 0)} of ${c.p.cylCapacityL} L left (Total_RBV ${fmtN(c.rbv.total, 1)} L, baseline ${fmtN(c.cylBase, 1)} L)\n` +
+    (c.cylEst.length ? c.cylEst.map(e => `  ${String(e.days).padStart(4)} d window: ${e.h != null ? 'empty in ' + fmtDur(e.h) + `  (${fmtN(e.rate, 0)} L/day)` : e.why}`).join('\n') : '  (collecting data)');
   if ($('ovCount')) $('ovCount').textContent = c.overrideCount;
   if ($('ovList')) $('ovList').textContent = c.overrides.slice(-50).reverse().map(o => `${fmtT(o.t)}  ${o.msg}`).join('\n') || '(none)';
 }
@@ -1249,6 +1323,7 @@ function wire() {
   $('btnZero').onclick = () => S().ctl.opFlowZero();
   $('btnResume').onclick = () => S().ctl.opResume();
   $('btnAdmin').onclick = () => openModal('admin');
+  $('btnNewCyl').onclick = () => { const st = S(); if (!st.ctl.down) st.ctl.newCylinder('operator'); };
   $('modalClose').onclick = closeModal;
   $('modal').addEventListener('click', e => { if (e.target.id === 'modal') closeModal(); });
   $('selMode').onchange = () => {
@@ -1288,7 +1363,7 @@ function wire() {
   $('wUnhold').onclick = w(s => s.plant.clearHold(), 'Alicat hold cleared at the device');
   $('wRampSet').onclick = () => { const st = S(); const v = Math.max(0, parseFloat($('wRamp').value) || 0); st.plant.putRamp(v); st.world(`Alicat ramp set to ${v} SLPM/s`); };
   $('wGas').onchange = () => { const st = S(); st.plant.a.gas = $('wGas').value; st.world(`Alicat gas table = ${st.plant.a.gas}`); };
-  $('wRefill').onclick = w(s => { s.plant.cylP = s.pp.cylP0; }, 'cylinder replaced (2000 psi)');
+  $('wRefill').onclick = w(s => { s.plant.cylP = s.pp.cylP0; }, 'cylinder replaced (2000 psi); the operator must press "New He cylinder fitted" for the forecast');
   $('wLow').onclick = w(s => { s.plant.cylP = 120; }, 'cylinder nearly empty (120 psi)');
   $('wEmpty').onclick = w(s => { s.plant.cylP = 0; }, 'cylinder empty');
   $('wCylPv').onchange = () => { S().plant.cylPresent = $('wCylPv').checked; };
@@ -1337,8 +1412,17 @@ function render() {
   $('roFlowBox').className = 'ro' + (!pl.rbv.running ? ' major' : c.alarms.has('flowHigh') || c.alarms.has('mismatch') ? ' minor' : '');
   $('roSP').textContent = fmtN(pl.rbv.sp, 2);
   $('roSPx').textContent = c.down ? 'controller down' : `commanded ${fmtN(c.lastCmd, 3)}${c.epid.FBON ? '  (PID)' : ''}`;
-  if (pl.cylPresent) { $('roCyl').textContent = fmtN(pl.cylP, 0); $('roCylBox').className = 'ro' + (pl.cylP < 200 ? ' major' : pl.cylP < 500 ? ' minor' : ''); $('roCylx').textContent = `≈ ${fmtN(pl.cylP * st.pp.cylLitersPerPsi, 0)} L He left`; }
-  else { $('roCyl').textContent = 'n/a'; $('roCylBox').className = 'ro na'; $('roCylx').textContent = 'CYL PV not configured'; }
+  {
+    // Litres left from the MFC totalizer (works without a pressure PV); pressure shown too once the CYL PV exists.
+    $('roCyl').textContent = fmtN(c.cylLeftL, 0);
+    $('roCylUnit').textContent = pl.cylPresent ? `L left  ·  ${fmtN(pl.cylP, 0)} psi (CYL PV)` : 'L left (from MFC totalizer)';
+    const cs = c.alarms.get('cylLow');
+    $('roCylBox').className = 'ro' + (cs ? (cs.sev >= 2 ? ' major' : ' minor') : '');
+    const hs = c.cylEst.filter(e => e.h != null).map(e => e.h);
+    $('roCylx').textContent = hs.length
+      ? `empty in ${fmtDur(Math.min(...hs))}–${fmtDur(Math.max(...hs))} (median ${fmtDur(c.cylMedianH)}, ${hs.length} windows)`
+      : 'run-out forecast: collecting data (needs ≥ 6 h)';
+  }
   // state
   const sk = c.state, sdef = STATES[sk];
   $('stateBadge').textContent = sk; $('stateBadge').style.background = sdef.color;
@@ -1388,8 +1472,8 @@ function render() {
     series: [{ key: 'flow', color: '#1f5fbf', label: 'Flow_RBV' }, { key: 'cmd', color: '#ff7f0e', label: 'commanded setpoint', step: true, width: 1.2 },
              { key: 'drvh', color: '#d62728', label: 'PID max (DRVH)', dash: [3, 3], step: true, width: 1 }],
     lines: [{ y: c.expectedFlow(), color: '#6a3d9a', dash: [2, 3], label: 'expected' }] });
-  drawChart($('cCyl'), { hist: st.hist, t0, t1, log: false, title: 'Cylinder pressure (psi)', noX: true, zero: true,
-    series: [{ key: 'cyl', color: '#555', label: 'cylinder' }] });
+  drawChart($('cCyl'), { hist: st.hist, t0, t1, log: false, title: 'Helium left in cylinder (L, from MFC totalizer)', noX: true, zero: true,
+    series: [{ key: 'cyl', color: '#555', label: 'litres left' }] });
   drawChart($('cState'), { hist: st.hist, t0, t1, stateStrip: true });
   // log
   if (logVersion !== lastLogRender) {

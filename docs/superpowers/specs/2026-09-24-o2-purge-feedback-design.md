@@ -307,8 +307,32 @@ BASIS manual.**
 2. Write 20 SLPM.
 3. Start the purge timer when `Flow_RBV` first reaches 95 % of 20 SLPM. At 3 SLPM/s that takes
    about 6.5 s.
-4. **Lid check from purge kinetics** (REVISED 2026-09-25 at the user's direction; supersedes the
-   `MinDrop` rule below):
+4. **Lid check, onset-based and faster** (REVISED again 2026-09-25; supersedes the fixed-window
+   version directly below):
+   - **Wait for the decay onset:** the first reading ≥ `lidOnsetFrac` (2 %, relative) below the
+     purge-start O2. With the lid on this comes ~10–13 s after full flow. The measurement window
+     starts wherever the decay actually starts, so uncertainty in the 7–18 s transport delay does
+     not matter.
+   - **No onset within `lidOnsetMax` (30 s)** → no decay → **OPEN_STOP**.
+   - **Otherwise, measure over `lidWindow` (15 s) after onset:**
+     - rate ratio = k_obs / (F/V)
+     - curvature = (decay rate in the 2nd half) / (1st half)
+   - **Why curvature:** with the lid on, the decay is exponential, so the curvature is ≈ 1.0–1.1.
+     An open box also dilutes quickly at first but then levels off.
+   - **Decide:** open if ratio < `openSlopeFrac` (0.5) **or** curvature < `lidCurvMin` (0.8).
+   - **Simulator:** decides **~26 s after full flow** with the lid on (was ~60 s), with 0 false
+     trips in 20 closed-lid purges.
+     - **Closed lid:** ratio 0.95, curvature 1.10.
+     - **Open box**, by air-exchange multiplier:
+       - ×1: 0.11 / 0.27
+       - ×0.5: 0.33 / 0.51
+       - ×0.3: 0.52 / 0.69, caught by curvature
+       - ×0.2: 0.63 / 0.78, caught by curvature
+       - ×0.1 passes: that box is effectively sealed.
+     - The earlier 10 s window without curvature missed ×0.3.
+
+   *Previous version:* **Lid check from purge kinetics** (REVISED 2026-09-25 at the user's
+   direction; superseded the `MinDrop` rule below):
    - With the lid on, O2 decays as exp(−F·t/V). With the lid open, the helium rises out of the
      enclosure and the decay is **at least 2× slower** (user's physical expectation).
    - **Measure** the decay rate k_obs = ln(C(20 s) / C(60 s)) / 40 s, with times counted from full
@@ -341,6 +365,9 @@ BASIS manual.**
      0.76 %, and took 19 min (collimator) to 72 min (normal lid) to return to ±0.02 %.
    - **Result:** with Δ = 0.01 % (user, 2026-09-25) plus the correction, the dip is ~0.91 %,
      back in band after 12 min (collimator) and 30 min (normal lid).
+   - **Default now Δ = −0.04 %** (user, 2026-09-25): hand off 0.04 % above target, on top of the
+     lag correction. After a purge to 0.99 %, O2 stays within 0.960–1.036 % (normal lid) and
+     0.954–1.037 % (collimator lid), back in band after 15 and 9 min.
    - **Negative Δ** (hand off *above* target) is allowed, as the user suggested. Δ = −0.10 % with
      no correction performs about the same at a 1 % target. The correction scales better at other
      targets because it is proportional.
@@ -481,6 +508,7 @@ The Alicat holds its last setpoint on its own, so helium keeps flowing if the IO
 | PID pinned at `DRVL` (0.01 SLPM) for 10 min with O2 below target − tolerance | PID (at minimum) | **None.** A log entry only: O2 too low is not an operator alarm (user, 2026-09-25). The 0.01 SLPM floor exists for a planned tighter enclosure; the current one needs far more flow. | none |
 | Flow ≥ 2× expected, or PID pinned at `DRVH` for 10 min | PID | MAJOR "flow too high, check enclosure seal" | Operator |
 | Controller IOC down (crash; procServ runs `--noautorestart`) | Alicat holds its last setpoint | None from this IOC. A heartbeat PV going stale can be watched by the alarm server or the easy-bluesky watchdog. | Operator restarts it via `start_ioc 15LSS_sample_gas`. On restart, the rules in 4.7 apply. |
+| Cylinder run-out forecast (median over windows, 5.5) below 24 h / 6 h | unaffected | MINOR / MAJOR "helium cylinder empty in < 24 h / 6 h (forecast)" | Operator fits a new cylinder, presses "New He cylinder fitted" |
 | Flow not matching setpoint (see 5.1) | PID continues | MAJOR "flow mismatch: cylinder empty or MFC fault?" | Operator |
 
 Zero flow happens only for a confirmed open enclosure or an explicit operator request.
@@ -542,6 +570,31 @@ hold, lid and purge alarms have their own timing and are not gated.
     - cracked lid: O2 abnormally high at 15 min, PID pinned at 17 min
     - collimator lid in mode A: flow ≥ 2× expected after settling
     - normal lid in collimator mode: wrong mode?
+
+### 5.5 Helium cylinder run-out forecast (ADDED 2026-09-25; no pressure PV needed)
+
+- **Source:** the Alicat's own totalizer, `$(P)$(R)Total_RBV` (standard litres, kept in the
+  device across IOC restarts). This is **read only**; the controller never resets it.
+- **New cylinder:** the operator presses **"New He cylinder fitted"** on the main panel. The IOC
+  stores the current `Total_RBV` as the baseline (autosaved).
+- **Remaining:** `cylCapacityL` (usable litres, default 8000 L, Deep admin) − litres used since
+  the baseline. If the totalizer goes backwards, for example because someone reset it, the
+  baseline is shifted so the count continues.
+- **Forecast:**
+  - Litres used are logged every 60 s, and 4 days are kept (an autosaved waveform in the IOC).
+  - For each window of **3, 2, 1, 0.5 and 0.25 days**, a least-squares usage rate (L/day) gives
+    run-out = remaining ÷ rate. Windows with less than 90 % data coverage are skipped.
+  - The **spread across windows is the confidence range** shown on the main panel, e.g. "empty
+    in 5.5–5.6 d (median 5.5 d, 5 windows)".
+- **Alarms** on the median: MINOR below `cylWarnH` (24 h), MAJOR below `cylAlarmH` (6 h).
+- **Simulator check:** 4 days of use (regulation at 0.99 % plus a lid cycle and purge every 6 h,
+  ~840 L/day). At day 4 all windows predicted 5.50–5.53 d. The cylinder actually ran out
+  5.52 d later. Early forecasts are honestly wide: at 6 h, only the 0.25 d window exists and it
+  had seen just one purge.
+- **Pressure PV (macro `CYL`), once it exists:** shown alongside, and usable to cross-check
+  `cylCapacityL`. Nothing depends on it.
+- **IOC implementation:** the 1-min usage log and the per-window regressions are simple enough
+  for the SNL program (a 5760-point array), with results published to records.
 
 ### 5.2 Expected flow
 
@@ -680,7 +733,7 @@ Three levels. Every screen takes the station prefix as a macro, so the same scre
 
 | Level | Audience | Content |
 |---|---|---|
-| **Main panel** | Users | Large readouts: **O2 %**, **flow (SLPM)**, **flow setpoint**, **cylinder pressure**. State and in-range indicator. Alarm banner showing the current `LastAction`/alarm text. O2 and flow trend plot. Buttons: **Purge**, **Flow Zero**, **Resume PID** (enabled only in OPEN_LOOP). Selectors: **enclosure mode**, **O2 target**. A button opens Admin. |
+| **Main panel** | Users | Large readouts: **O2 %**, **flow (SLPM)**, **flow setpoint**, **helium cylinder**. The cylinder readout shows litres left from the MFC totalizer, the run-out range (5.5), and pressure once the `CYL` PV exists. A **"New He cylinder fitted"** button. State and in-range indicator. Alarm banner showing the current `LastAction`/alarm text. O2 and flow trend plot. Buttons: **Purge**, **Flow Zero**, **Resume PID** (enabled only in OPEN_LOOP). Selectors: **enclosure mode**, **O2 target**. A button opens Admin. |
 | **Admin** | Beamline staff | Tolerance and Δ. Purge settings: flow, timeout, drop check. PID gains and output limits per mode. Override log and counter. Alarm thresholds. A button opens Deep admin. |
 | **Deep admin** | Instrument scientist | **Every physical and threshold number, as an editable, autosaved field:** mode base flows and exponents n; lid threshold, filter time and `LidSlope`; drop-check time, `MinDrop` and skip level; ambient O2; ramp-rate clamps (2 / 5 SLPM/s); hard flow ceiling; flow-mismatch tolerance and margin; hold-monitor timing and retries; O2 frozen and invalid limits; averaging count; `epid` scan and `ODEL`. Also the station's linked PV names (Alicat prefix, O2 PV, cylinder PV), shown read-only because they are set at IOC start. |
 
