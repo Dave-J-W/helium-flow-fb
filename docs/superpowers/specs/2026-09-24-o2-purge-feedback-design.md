@@ -345,7 +345,15 @@ BASIS manual.**
      no correction performs about the same at a 1 % target. The correction scales better at other
      targets because it is proportional.
    - Δ previously defaulted to 0.15 %.
-6. **Timeout**: at 6.5 min, go to HANDOFF anyway and raise a MINOR "purge incomplete" alarm.
+6. **Timeout** (REVISED 2026-09-25: scales with the target):
+   - **Formula:** timeout = `purgeTimeoutMargin` (1.3) × [ (V/F)·ln(C_start / (target − Δ)) +
+     `purgeLag` + `handoffHold` ], clamped to 120–1800 s.
+   - **After the lid check** it is recomputed from the measured decay rate and the O2 at the
+     check. A blind purge assumes C_start = `ambientRef` (19.4 %).
+   - **Examples from air:** 11.5 min for a 0.3 % target, 8.2 min for 0.99 %, 5.2 min for 3 %.
+     In the simulator every purge from 0.3 % to 3 % now hands off on O2, not on the timeout.
+   - **On timeout:** go to HANDOFF anyway and raise a MINOR "purge incomplete" alarm.
+   - The fixed 6.5 min timeout is superseded.
 
 **Measured timing conflict (DERIVED from 2.1.2, needs a decision; section 9).**
 - From air, reaching target − Δ = 0.84 % at 20 SLPM takes **6.4–6.6 min of flow** (V = 40.5–42.2 L). Add ~13 s of sensor delay and the 15 s hold.
@@ -469,7 +477,8 @@ The Alicat holds its last setpoint on its own, so helium keeps flowing if the IO
 | Ramp rate out of range | unaffected (clamped) | MINOR, logged | Automatic |
 | Gas table ≠ He | unaffected | MINOR | Operator, optional |
 | Flow ≥ 1.5× expected | PID | MINOR "flow high, check enclosure" | Automatic |
-| PID pinned at `DRVL` for 10 min with O2 below target − tolerance (enclosure seals better than the selected mode assumes, typically collimator mode chosen with the normal lid fitted) | PID (at minimum) | MINOR "PID at minimum flow, O2 below target: wrong enclosure mode selected?" | Operator selects the correct mode |
+| PID demand (`OVAL`) ≤ `flowLowX` (0.5) × expected flow for `alarmDelay`, after the settle time (typically collimator mode chosen with the normal lid fitted). Judged on the demand, not the measured flow, so an empty cylinder does not trigger it. | PID (regulating normally at the lower flow) | MINOR "flow ≤ 0.5× expected: wrong enclosure mode selected?" | Operator selects the correct mode |
+| PID pinned at `DRVL` (0.01 SLPM) for 10 min with O2 below target − tolerance | PID (at minimum) | **None.** A log entry only: O2 too low is not an operator alarm (user, 2026-09-25). The 0.01 SLPM floor exists for a planned tighter enclosure; the current one needs far more flow. | none |
 | Flow ≥ 2× expected, or PID pinned at `DRVH` for 10 min | PID | MAJOR "flow too high, check enclosure seal" | Operator |
 | Controller IOC down (crash; procServ runs `--noautorestart`) | Alicat holds its last setpoint | None from this IOC. A heartbeat PV going stale can be watched by the alarm server or the easy-bluesky watchdog. | Operator restarts it via `start_ioc 15LSS_sample_gas`. On restart, the rules in 4.7 apply. |
 | Flow not matching setpoint (see 5.1) | PID continues | MAJOR "flow mismatch: cylinder empty or MFC fault?" | Operator |
@@ -529,8 +538,20 @@ Both overrides are logged to `$(PP)LastAction` and increment `$(PP)OverrideCount
 - **Scan and deadband.** `SCAN` = 10 s. `ODEL` = 0.01 SLPM suppresses writes below the MFC's
   resolution. `epid` keeps accumulating the integral internally (VERIFIED). There is no error
   deadband: the 0.01 % sensor noise × `KP` is already below the MFC's resolution (DERIVED).
-- **Limits.** `DRVL` = max(0.1, 0.5 × expected flow). `DRVH` = mode ceiling, **hard maximum
-  2.0 SLPM**, to be raised or lowered by the surface-vibration test.
+- **Limits (REVISED 2026-09-25).** `DRVL` = **0.01 SLPM**, one global minimum set by the user:
+  if the enclosure needs less helium, it gets less. `DRVH` = mode ceiling, **hard maximum
+  2.0 SLPM**, to be raised or lowered by the surface-vibration test. The old
+  `DRVL` = max(0.1, 0.5 × expected) held a normal lid in collimator mode at 0.42 SLPM, with O2
+  drifting below target.
+- **Gain scheduling (ADDED 2026-09-25).**
+  - Near the operating point the O2 slope per SLPM is ≈ C/V, proportional to the target. A KP
+    tuned at 1 % is therefore 3× too strong at 3 %: the simulator's normal lid oscillated between
+    0.01 and 0.4 SLPM there.
+  - **Rule:** the per-mode KP is defined "at 0.99 %", and the IOC applies KP × 0.99/target. KI,
+    in repeats/s, is unchanged.
+  - **Result:** steady regulation at 0.3–3 % for both lids, and 2–3× faster settling at low
+    targets. `gainSchedule` = 0 turns it off.
+  - In the IOC this is one calc record feeding `epid.KP`.
 - **Starting gains (PROVISIONAL).** `KP` ≈ −0.4 SLPM per %O2, `KI` ≈ 0.0033 /s. Replace with
   per-mode values from bump tests, using SIMC tuning with τc = 2θ.
 
@@ -668,7 +689,12 @@ Findings from the first scenario runs, to be decided:
    where the fitted lid and the mode were separate selectors. Fixes:
    - the simulator's fitted lid now follows the mode by default
    - a new MINOR alarm fires when the PID is pinned at minimum flow with O2 below target (§5)
-5. **Mode-A recovery after a purge is slow.** (Largely fixed by the lag-corrected handoff, 4.2.) After handoff O2 sits ~0.2 % below target. The PID
+5. **Mode-A recovery after a purge is slow.** (Largely fixed by the lag-corrected handoff, 4.2.)
+7. **Low-flow regime is now in use but unmeasured.** With `DRVL` = 0.01 SLPM the controller can
+   run between 0 and 0.2 SLPM. There the ingress moves from the with-flow power law to the
+   ~4× higher flow-off leak-in, as over-pressure is lost. The simulator blends the two smoothly,
+   with an unmeasured scale `Fblend` = 0.05 SLPM. Targets above ~2 % on the normal lid live in
+   this regime, and one bump test there would pin it down. After handoff O2 sits ~0.2 % below target. The PID
    holds flow at `DRVL` (0.125 SLPM) and O2 takes about an hour to rise back to target.
    This saves helium, but it is worth knowing.
 

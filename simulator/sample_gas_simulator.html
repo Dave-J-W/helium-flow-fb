@@ -243,7 +243,10 @@ function defaultControllerParams() {
       A: { name: 'Normal lid', baseFlow: 0.25, n: 1.0, KP: -9.3, KI: 8.8e-4, drvh: 1.0 },
       B: { name: 'Collimator lid', baseFlow: 0.84, n: 0.53, KP: -10, KI: 1.4e-3, drvh: 2.0 },   // retuned 2026-09-25 (was −4.4 / 8.8e-4)
     },
-    purgeFlow: 20, purgeTimeout: 390, dropSkipLevel: 18,
+    purgeFlow: 20, dropSkipLevel: 18,
+    purgeTimeoutMargin: 1.3,   // timeout = margin × kinetic purge time to target − Δ (scales with target)
+    purgeTimeoutMin: 120, purgeTimeoutMax: 1800,   // s, clamps
+    ambientRef: 19.4,          // % O2 assumed at purge start when the analyzer is unavailable (blind purge)
     V: 41,                 // L, enclosure volume: sets the lid-on purge decay rate F/V
     kinT1: 20,             // s after full flow: start of the decay-rate window
     dropCheckTime: 60,     // s after full flow: end of the window, where the lid decision is made
@@ -251,12 +254,13 @@ function defaultControllerParams() {
     handoffHold: 5, handoffFlowTol: 0.05, fbDelay: 120,
     lidLevel: 10, lidFilter: 5, lidSlope: 0.2, lidSlopeWindow: 60, lidArmLevel: 9,
     rampMaxPurge: 5, rampMinHandoff: 2,
-    hardCeiling: 2.0, drvlFrac: 0.5, drvlMin: 0.1,
+    hardCeiling: 2.0, drvlMin: 0.01,   // global minimum PID flow (user, 2026-09-25; was max(0.1, 0.5 × expected))
     mismatchAbs: 0.05, mismatchFrac: 0.05, mismatchMargin: 5,
     holdDetect: 3, holdRetries: 3, holdRetryInterval: 10, holdSlowRetry: 60,
     frozenTime: 30, o2Min: -0.5, o2Max: 25,
     avgN: 10, pidScan: 10, odel: 0.01,
-    flowMinorX: 1.5, flowMajorX: 2.0, pinnedTime: 600, o2AbnormalOffset: 0.3,
+    gainSchedule: 1,       // 1 = KP scaled by 0.99/target (mode KP values are "at 0.99 %"); 0 = fixed KP
+    flowMinorX: 1.5, flowMajorX: 2.0, flowLowX: 0.5, pinnedTime: 600, o2AbnormalOffset: 0.3,
     alarmDelay: 10,        // s a level must persist before an alarm is raised, changed or cleared (EPICS-style debounce)
     alarmSettle: 1800,     // s after feedback-on or a target change during which flow/O2/pinned alarms are suppressed
   };
@@ -268,6 +272,7 @@ function defaultPlantParams() {
     ingressB_a: 0.71, ingressB_b: -0.87,     // collimator lid
     ingressFmin: 0.2,                        // SLPM floor for the power laws
     kOffA: 0.00142, kOffB: 0.005,            // /min, flow off, lid on (B unmeasured)
+    Fblend: 0.05,                            // SLPM, scale of the flow-off ↔ with-flow ingress blend (unmeasured)
     crackIngress: 3.0,                       // %·L/min extra with a cracked lid
     openTau: 5.75,                           // s, lid-lift time constant (MEASURED)
     openMix: 1.0,                            // multiplier on open-lid air exchange (open box at 20 SLPM unmeasured)
@@ -336,8 +341,11 @@ class Plant {
     } else {
       const f = Math.max(0, (amb - this.C) / (amb - 1));      // ingress shrinks as C approaches ambient
       const crackJ = this.crack ? pp.crackIngress * f : 0;
-      if (F < 0.05) dC = (pp[this.lidType === 'A' ? 'kOffA' : 'kOffB'] / 60) * (amb - this.C) + crackJ / V / 60;
-      else dC = ((this.ingress(F) * f + crackJ) - F * this.C) / V / 60;
+      // Ingress blends smoothly from the measured flow-off leak-in (no over-pressure; ~4× the 0.25 SLPM
+      // value for the normal lid) to the measured with-flow power law. The blend scale Fblend is unmeasured.
+      const Joff = pp[this.lidType === 'A' ? 'kOffA' : 'kOffB'] * V * (amb - this.C);   // %·L/min
+      const w = Math.exp(-F / pp.Fblend);
+      dC = ((1 - w) * this.ingress(F) * f + w * Joff + crackJ - F * this.C) / V / 60;
     }
     this.C = clamp(this.C + dC * dt, 0, 21);
     // --- Sensor zone lag (§2.1.5) and transport delay (§2.1.3)
@@ -460,16 +468,32 @@ class Controller {
   }
   configEpid() {
     const e = this.epid, p = this.p, m = p.modes[p.mode], exp = this.expectedFlow();
-    e.VAL = p.target; e.KP = m.KP; e.KI = m.KI; e.ODEL = p.odel;
+    // Gain scheduling: the process slope dC/dt per SLPM is ≈ C/V, i.e. proportional to the target, so the
+    // mode's KP (tuned at 0.99 %) is scaled by 0.99/target to keep the loop gain constant. KI (repeats/s) is unchanged.
+    e.VAL = p.target; e.KP = p.gainSchedule ? m.KP * (0.99 / p.target) : m.KP; e.KI = m.KI; e.ODEL = p.odel;
     e.DRVH = Math.min(m.drvh, p.hardCeiling);
-    e.DRVL = Math.min(e.DRVH, Math.max(p.drvlMin, p.drvlFrac * exp));
+    e.DRVL = Math.min(e.DRVH, p.drvlMin);
+  }
+  purgeTimeout() {                             // §4.2: kinetic purge time to target − Δ, × margin
+    const p = this.p, sd = this.sd || {};
+    const goal = Math.max(0.05, p.target - p.delta);
+    const extra = p.purgeLag + p.handoffHold;
+    let t;
+    if (sd.kObs > 0 && sd.checkAt != null) {   // after the lid check: use the measured decay from the check point
+      t = sd.checkAt + p.purgeTimeoutMargin * (Math.log(Math.max(sd.cCheck, goal) / goal) / sd.kObs + extra);
+    } else {
+      const c0 = (this.blind || !(sd.o2Start > 0)) ? p.ambientRef : sd.o2Start;
+      const k = p.purgeFlow / p.V / 60;
+      t = p.purgeTimeoutMargin * (Math.log(Math.max(c0, goal) / goal) / k + extra);
+    }
+    return clamp(t, p.purgeTimeoutMin, p.purgeTimeoutMax);
   }
   // ---------------- state entry
   enter(s, reason) {
     const prev = this.state, p = this.p;
     this.state = s; this.sd = { t0: this.now };
     if (s !== 'REGULATE') this.epid.FBON = false;
-    for (const k of ['flowHigh', 'pinned', 'pinnedLow', 'o2High', 'openLoop']) { this.clearAlarm(k, true); delete this.deb[k]; }
+    for (const k of ['flowHigh', 'flowLow', 'pinned', 'pinnedLow', 'o2High', 'openLoop']) { this.clearAlarm(k, true); delete this.deb[k]; }
     this.pinnedSec = 0; this.pinnedLowSec = 0;
     if (s === 'REGULATE') this.settleT0 = this.now;
     this.lastAction = `${s}: ${reason}`;
@@ -584,7 +608,8 @@ class Controller {
     if (!this.o2ok && !this.blind) { this.blind = true; this.st.log(2, 'O2 lost during purge: continuing on the timer (blind)'); }
     const el = sd.timerT0 == null ? 0 : this.now - sd.timerT0;
     sd.elapsed = el;
-    if (this.blind) { if (el >= p.purgeTimeout) this.enter('OPEN_LOOP', 'blind purge complete'); return; }
+    sd.timeout = this.purgeTimeout();
+    if (this.blind) { if (el >= sd.timeout) this.enter('OPEN_LOOP', 'blind purge complete'); return; }
     // Lid inference from purge kinetics (§4.2): with the lid on, O2 decays as exp(−F·t/V).
     // With the lid open the helium rises away and the decay is at least 2× slower.
     if (sd.timerT0 != null && sd.c1 == null && el >= p.kinT1) sd.c1 = this.o2;
@@ -593,7 +618,7 @@ class Controller {
       if (sd.o2Start >= p.dropSkipLevel) {
         const kExp = p.purgeFlow / p.V / 60;                                            // 1/s, lid on
         const kObs = (sd.c1 > 0 && this.o2 > 0) ? Math.log(sd.c1 / this.o2) / (p.dropCheckTime - p.kinT1) : 0;
-        const ratio = kObs / kExp; sd.kin = ratio; sd.kObs = kObs;
+        const ratio = kObs / kExp; sd.kin = ratio; sd.kObs = kObs; sd.checkAt = el; sd.cCheck = this.o2;
         if (ratio < p.openSlopeFrac) {
           this.stopOpen(`purge decay only ${fmtN(100 * ratio, 0)} % of the lid-on rate: enclosure open?`); return;
         }
@@ -608,8 +633,8 @@ class Controller {
     if (sd.below >= p.handoffHold) {
       this.enter('HANDOFF', `lag-corrected O2 ${fmtN(sd.est, 3)} % < target − Δ for ${p.handoffHold} s (reading ${fmtN(this.o2, 3)} %)`); return;
     }
-    if (el >= p.purgeTimeout) {
-      this.latch('purgeInc', 1, 'purge incomplete: timeout reached before target − Δ');
+    if (el >= sd.timeout) {
+      this.latch('purgeInc', 1, `purge incomplete: timeout (${fmtT(sd.timeout)}) reached before target − Δ`);
       this.enter('HANDOFF', 'purge timeout');
     }
   }
@@ -640,14 +665,18 @@ class Controller {
       const ratio = r.flow / this.expectedFlow();
       this.debounce('flowHigh', !settled ? 0 : ratio >= p.flowMajorX ? 2 : ratio >= p.flowMinorX ? 1 : 0,
         `flow ≥ ${p.flowMinorX}× expected: check enclosure`, `flow ≥ ${p.flowMajorX}× expected: check enclosure seal`);
+      // Flow well below what the selected mode expects: usually the wrong mode (e.g. collimator mode, normal lid fitted)
+      // judged on the PID's demand (OVAL), not the measured flow, so an empty cylinder does not read as "wrong mode"
+      this.debounce('flowLow', settled && this.epid.OVAL / this.expectedFlow() <= p.flowLowX ? 1 : 0,
+        `flow ≤ ${p.flowLowX}× expected: wrong enclosure mode selected?`, '');
       if (this.epid.OVAL >= this.epid.DRVH - 1e-6) this.pinnedSec++; else this.pinnedSec = 0;
       if (settled && this.pinnedSec >= p.pinnedTime) this.setAlarm('pinned', 2, 'PID pinned at max flow: check enclosure seal');
       else this.clearAlarm('pinned');
       // Pinned at minimum flow while O2 stays below target: the enclosure seals better than the selected
       // mode assumes (typically the wrong mode, e.g. collimator mode with the normal lid fitted).
       if (this.epid.OVAL <= this.epid.DRVL + 1e-6 && this.o2ok && this.o2 < p.target - p.tol) this.pinnedLowSec++; else this.pinnedLowSec = 0;
-      if (settled && this.pinnedLowSec >= p.pinnedTime) this.setAlarm('pinnedLow', 1, 'PID at minimum flow, O2 below target: wrong enclosure mode selected?');
-      else this.clearAlarm('pinnedLow');
+      // O2 below target is not worth an operator alarm (user, 2026-09-25): log it once, no alarm.
+      if (settled && this.pinnedLowSec === p.pinnedTime) this.st.log(0, 'note: PID at minimum flow and O2 still below target');
       if (this.o2ok) this.debounce('o2High', !settled ? 0 : this.o2 > p.target + p.o2AbnormalOffset ? 2 : this.o2 > p.target + p.tol ? 1 : 0,
         'O2 above target range', 'O2 abnormally high');
     }
@@ -798,7 +827,7 @@ const S = () => stations[cur];
 const act = (t, label, fn) => ({ t, label, do: fn });
 const SCENARIOS = [
   { name: '1. Normal purge from air, normal lid (mode A)',
-    desc: 'Lid closed, box full of air. Purge at t = 5 s.\nWatch: lid check passes (decay ≈ 100 % of the lid-on rate). Handoff when O2 < 0.84 % for 15 s, OR the 6.5 min timeout fires first (the timing conflict from spec §4.2). Then a 2 min feedback delay and regulation toward 0.99 %. Mode A settles slowly (τ ≈ 169 min); try 1000×.',
+    desc: 'Lid closed, box full of air. Purge at t = 5 s.\nWatch: lid check passes (decay ≈ 100 % of the lid-on rate). Handoff when the lag-corrected O2 < target − Δ for 5 s; the purge timeout scales with the target (≈ 1.3 × the kinetic purge time). Then a 2 min feedback delay and regulation toward 0.99 %. Mode A settles slowly (τ ≈ 169 min); try 1000×.',
     events: [act(5, 'operator presses Purge', s => s.ctl.opPurge())] },
   { name: '2. Purge with the lid left open',
     desc: 'Lid open; Purge at t = 5 s.\nExpect: OPEN_STOP at the 60 s lid check (zero flow). The O2 decay rate from 20 s to 60 s after full flow is compared with the lid-on rate F/V; below half means open.\nCaveat: the open-box response to 20 SLPM has never been measured. The "openMix" plant parameter sets it; lower it (e.g. 0.02) to see where an open box would start passing the check.',
@@ -979,7 +1008,7 @@ const ADMIN_FIELDS = [
   F('tol', 'O2 in-range tolerance (display only, not a deadband)', '%', 0.005, 0.5, 0.005),
   F('delta', 'Purge handoff margin Δ below target (negative = above target)', '%', -1, 1, 0.01),
   F('purgeFlow', 'Purge flow', 'SLPM', 1, 20, 0.5),
-  F('purgeTimeout', 'Purge timeout', 's', 60, 1800, 10, true),
+  F('purgeTimeoutMargin', 'Purge timeout = this × kinetic time to target − Δ', '×', 1, 3, 0.05),
   F('dropCheckTime', 'Lid check: decision time after full flow', 's', 20, 300, 5, true),
   F('fbDelay', 'Feedback delay after handoff (sensor settling)', 's', 0, 600, 10, true),
   F('flowMinorX', 'Flow-high MINOR threshold', '× exp', 1.05, 5, 0.05),
@@ -989,7 +1018,7 @@ const ADMIN_FIELDS = [
   F('alarmSettle', 'Flow/O2 alarms suppressed after feedback-on or target change', 's', 0, 14400, 60, true),
 ];
 const ADMIN_MODE_FIELDS = [
-  F('KP', 'epid KP (negative)', 'SLPM/%', -100, 0, 0.1),
+  F('KP', 'epid KP at 0.99 % target (negative; scaled by 0.99/target)', 'SLPM/%', -100, 0, 0.1),
   F('KI', 'epid KI', '1/s', 0, 0.05, 0.0001),
   F('drvh', 'Max PID flow (DRVH, capped by hard ceiling)', 'SLPM', 0.1, 20, 0.05),
 ];
@@ -1009,8 +1038,11 @@ const DEEP_FIELDS = [
   F('rampMaxPurge', 'Ramp clamp at purge start (max; 0 counts as instant)', 'SLPM/s', 0.5, 20, 0.5),
   F('rampMinHandoff', 'Ramp clamp at handoff (min)', 'SLPM/s', 0.1, 10, 0.1),
   F('hardCeiling', 'Hard PID flow ceiling (surface vibration)', 'SLPM', 0.1, 20, 0.1),
-  F('drvlFrac', 'DRVL as fraction of expected flow', '', 0, 1, 0.05),
-  F('drvlMin', 'DRVL absolute minimum', 'SLPM', 0, 1, 0.01),
+  F('drvlMin', 'Global minimum PID flow (DRVL)', 'SLPM', 0, 1, 0.01),
+  F('purgeTimeoutMin', 'Purge timeout: minimum', 's', 30, 1800, 10, true),
+  F('purgeTimeoutMax', 'Purge timeout: maximum', 's', 60, 7200, 30, true),
+  F('ambientRef', 'O2 assumed at start of a blind purge', '%', 5, 21, 0.1),
+  F('flowLowX', 'Flow-low MINOR (wrong mode?) threshold', '× exp', 0.05, 0.95, 0.05),
   F('mismatchAbs', 'Flow mismatch tolerance (absolute)', 'SLPM', 0.01, 2, 0.01),
   F('mismatchFrac', 'Flow mismatch tolerance (fraction)', '', 0, 0.5, 0.01),
   F('mismatchMargin', 'Flow mismatch time margin after ramp', 's', 1, 120, 1, true),
@@ -1024,6 +1056,7 @@ const DEEP_FIELDS = [
   F('avgN', 'O2 averaging (compress N)', 'samples', 1, 120, 1, true),
   F('pidScan', 'epid scan period', 's', 1, 120, 1, true),
   F('odel', 'epid ODEL (output deadband)', 'SLPM', 0, 0.5, 0.005),
+  F('gainSchedule', 'Gain scheduling: KP × 0.99/target (1 = on, 0 = off)', '', 0, 1, 1, true),
   F('alarmDelay', 'Alarm debounce (level must persist)', 's', 0, 300, 1, true),
 ];
 const DEEP_MODE_FIELDS = [
@@ -1034,7 +1067,8 @@ const PLANT_FIELDS = [
   F('V', 'Enclosure volume', 'L', 5, 200, 1), F('ingressA_a', 'Normal lid ingress a', '%·L/min', 0, 5, 0.01),
   F('ingressA_b', 'Normal lid ingress b (F^b)', '', -2, 2, 0.01), F('ingressB_a', 'Collimator ingress a', '%·L/min', 0, 5, 0.01),
   F('ingressB_b', 'Collimator ingress b (F^b)', '', -2, 2, 0.01), F('kOffA', 'Flow-off leak-in, normal lid', '/min', 0, 0.1, 0.0001),
-  F('kOffB', 'Flow-off leak-in, collimator', '/min', 0, 0.1, 0.0001), F('crackIngress', 'Cracked-lid extra ingress', '%·L/min', 0, 50, 0.5),
+  F('kOffB', 'Flow-off leak-in, collimator', '/min', 0, 0.1, 0.0001), F('Fblend', 'Flow-off ↔ with-flow ingress blend scale', 'SLPM', 0.005, 1, 0.005),
+  F('crackIngress', 'Cracked-lid extra ingress', '%·L/min', 0, 50, 0.5),
   F('openTau', 'Lid-lift time constant', 's', 1, 60, 0.25), F('openMix', 'Open-lid air exchange multiplier', '', 0.01, 5, 0.01),
   F('zoneTauHold', 'Sensor-zone lag at hold flow', 's', 1, 300, 1), F('delayA', 'Transport delay A (A + B/F)', 's', 0, 60, 0.5),
   F('delayB', 'Transport delay B (A + B/F)', 's·SLPM', 0, 60, 0.1), F('delayMax', 'Transport delay maximum', 's', 5, 190, 1),
@@ -1260,7 +1294,7 @@ function render() {
   let pr = '';
   if (sk === 'PURGE') {
     const sd = c.sd;
-    pr = `purge ${fmtT(sd.elapsed)} / ${fmtT(p.purgeTimeout)}${sd.timerT0 == null ? ' (waiting for full flow)' : ''}` +
+    pr = `purge ${fmtT(sd.elapsed)} / ${fmtT(sd.timeout || c.purgeTimeout())} (scaled)${sd.timerT0 == null ? ' (waiting for full flow)' : ''}` +
          (c.blind ? '  BLIND (timer only)' : `  start ${fmtN(sd.o2Start)} %  lid check: ${sd.kin == null ? 'pending' : sd.kin === 'skipped' ? 'skipped' : 'decay ' + fmtN(100 * sd.kin, 0) + ' % of lid-on'}  lag-corrected ${fmtN(sd.est, 3)} %, handoff at < ${fmtN(p.target - p.delta, 3)} %`);
   } else if (sk === 'HANDOFF') {
     pr = c.sd.phase === 'settle' ? 'waiting for flow to settle at expected' : `feedback on in ${fmtT(p.fbDelay - (c.now - c.sd.t1))}`;
