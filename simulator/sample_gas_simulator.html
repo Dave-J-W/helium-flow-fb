@@ -302,8 +302,10 @@ function defaultPlantParams() {
     delayA: 9, delayB: 17.7, delayMax: 75,   // transport delay = min(max, A + B/F) s
     ambientBase: 19.2, ambientPeak: 19.5, ambientRelax: 1800,
     noise: 0.00084,                          // % per 1 Hz sample, white (MEASURED 2026-09-25, 1 Hz record, normal lid)
-    wanderRel: 7.3e-4,                       // real O2 wander, relative σ (0.67 m% at 0.92 %; MEASURED, believed real)
-    wanderTau: 79,                           // s, correlation time of the wander (Allan-deviation fit, analysis/noise_analysis.py)
+    wanderRel: 7.3e-4,                       // slow correlated reading component, relative σ (0.67 m% at 0.92 %; MEASURED).
+                                             // NOT bulk O2 (τ ≪ V/F): analyzer or local sensor-zone mixing, so it is
+                                             // applied to the reading only.
+    wanderTau: 79,                           // s, its correlation time (Allan-deviation fit, analysis/noise_analysis.py)
     alicatTau: 0.5, alicatRes: 0.01, alicatMax: 20, holdOpenFlow: 0.7,
     cylP0: 2000, cylLitersPerPsi: 4.25, cylPempty: 30, cylPfull: 150,
   };
@@ -380,7 +382,7 @@ class Plant {
     const dWant = this.lid === 'open' ? 2 : Math.min(pp.delayMax, pp.delayA + pp.delayB / Math.max(F, 0.2));
     if (dWant < this.dEff) this.dEff = dWant; else this.dEff = Math.min(dWant, this.dEff + 0.5 * dt);
     const lag = Math.min(this.histLen - 1, Math.round(this.dEff / DT));
-    // Real O2 wander (Ornstein–Uhlenbeck, relative): slow leak / temperature fluctuations seen in the 1 Hz data
+    // Slow correlated reading component (Ornstein–Uhlenbeck, relative) seen in the 1 Hz data; not bulk O2
     this.wander += -this.wander * dt / pp.wanderTau + pp.wanderRel * Math.sqrt(2 * dt / pp.wanderTau) * gauss();
     this.delayed = this.hist[(this.hi - lag + this.histLen) % this.histLen] * (1 + (this.lid === 'open' ? 0 : this.wander));
   }
@@ -1291,7 +1293,7 @@ const PLANT_FIELDS = [
   F('zoneTauHold', 'Sensor-zone lag at hold flow', 's', 1, 300, 1), F('delayA', 'Transport delay A (A + B/F)', 's', 0, 60, 0.5),
   F('delayB', 'Transport delay B (A + B/F)', 's·SLPM', 0, 60, 0.1), F('delayMax', 'Transport delay maximum', 's', 5, 190, 1),
   F('noise', 'Analyzer white noise per 1 Hz sample', '%', 0, 0.05, 0.0001),
-  F('wanderRel', 'Real O2 wander, relative σ', '', 0, 0.01, 0.0001), F('wanderTau', 'Real O2 wander correlation time', 's', 5, 3600, 5), F('holdOpenFlow', 'Flow with valve held at 100 %', 'SLPM', 0, 20, 0.1),
+  F('wanderRel', 'Slow reading component (not bulk O2), relative σ', '', 0, 0.01, 0.0001), F('wanderTau', 'Slow reading component correlation time', 's', 5, 3600, 5), F('holdOpenFlow', 'Flow with valve held at 100 %', 'SLPM', 0, 20, 0.1),
   F('cylLitersPerPsi', 'Cylinder litres per psi', 'L/psi', 0.5, 50, 0.25), F('alicatTau', 'MFC flow response τ', 's', 0.05, 10, 0.05),
 ];
 

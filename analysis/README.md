@@ -137,36 +137,45 @@ Events: **A** is flow off → lift → 1.7 h open → unlogged purge. **C** is a
 * **Caveat:** the fast numbers come from **two lifts, two purges and one sealed flow-off, all with the normal lid**.
   The collimator lid needs its own 10 s record before these thresholds are hard-coded for it.
 
-## 9. Reading noise at 1 Hz: white sensor noise + slow real wander (fig 14; `python noise_analysis.py`)
+## 9. O2 at 1 Hz: real trend + white noise + slow correlated component (fig 14; `python noise_analysis.py`)
+
+*Corrected 2026-09-25:* the user's "wander is likely real" referred to the **trend**, which is
+removed before the noise statistics. The slow correlated component below is **not** bulk O2.
 
 **Record:** `data/oxygen level 1 Hz 25 Sep normal lid 0.25 SLPM.csv`.
 * 25 Sep 14:31–15:01 (30 min, 1801 samples).
 * Normal lid, Alicat setpoint 0.25 SLPM (Flow_RBV 0.24–0.26).
-* O2 rose 0.905 → 0.932 % (+0.83 m%/min), so a cubic trend is removed first.
+* O2 rose 0.905 → 0.932 % (+0.83 m%/min). **This trend is real enclosure O2** (user). It also fits
+  the leak model, which predicts +0.41 m%/min at this level and flow: an ingress 7 % above nominal
+  explains it, within the ×/÷1.3 seal spread. A cubic trend is removed before the noise statistics.
 * 1 m% = 0.001 % O2.
 
 **Results:**
 * **White sensor noise:** 0.84 m% per 1 Hz sample (first-difference estimate). It averages down
   as expected at first: 0.41 m% over 5 s, 0.34 m% over 10 s.
-* **Slow wander:** past ~10 s, averaging stops helping.
+* **Slow correlated component:** past ~10 s, averaging stops helping.
   * The Allan deviation of the detrended record levels off at **0.32–0.44 m% from 10 to 300 s**.
   * Samples stay correlated: +0.34 at 1 s lag, +0.13 at 60 s.
   * The spectrum has broad bumps at 4–15 min periods.
-  * The user judges this to be **real O2** (leak / temperature), not analyzer drift. This record
-    alone cannot separate the two.
-* **Model:** white σ_w = **0.84 m%** + Ornstein–Uhlenbeck wander σ_o = **0.67 m%** (0.073 % of
-  level), τ = **79 s**.
+  * **It is not bulk O2.** The enclosure mixes on V/F ≈ 164 min at 0.25 SLPM, so its average
+    cannot move 0.7 m% in ~80 s, nor step (+2 m% at 16.5 min). It is analyzer noise or local
+    mixing at the sensor. Either way the controller should not chase it.
+* **Model:** white σ_w = **0.84 m%** + Ornstein–Uhlenbeck component σ_o = **0.67 m%** (0.073 %
+  of level), τ = **79 s**, applied to the reading only.
   * Fitted to the Allan deviation over τ 1–300 s: rms log error 0.04, against 1.14 for white
     noise alone.
   * The controller simulator uses exactly these numbers.
 * **Averaging:** a 20-sample mean reduces the residual to 0.59 m%, a 30-sample mean only to
-  0.56 m%. The wander sets the floor.
+  0.56 m%. The slow component sets the floor.
 * **Cross-check against the 10 s archive:** 36 steady windows near 1 % scatter by 0.95 m% per
   sample. The model predicts 0.87 m%.
 * **For the controller:** total reading scatter ~1 m% is about 20× inside the ±20 m% tolerance.
-  In simulation, the current PID (10-sample mean, single gain set) holds the **true O2** to
-  0.69–0.72 m% std. More smoothing or softer near-target gains cut MFC moves (26–33 → 5–10 per
-  hour) but let more of the real wander through (0.74–0.96 m%).
+  Simulated **bulk** O2 std (normal / collimator lid):
+  * current PID (10-sample mean, one gain set): 0.57 / 0.63 m%, 31 / 40 MFC changes per hour
+  * **fine band 0.01 % with KP × 0.5:** 0.60 / 0.66 m%, **7 / 11** changes per hour. A 30 % worse
+    seal peaks at 12 / 19 m% bulk, still in band.
+  * heavier smoothing (30 samples) is worst: 0.79 / 0.83 m%. It adds lag without cutting moves
+    much.
 * **Caveat:** one record, one lid, one level. There is an unexplained +2 m% step at 16.5 min,
   included in the fit. A collimator-lid 1 Hz record would complete this.
 

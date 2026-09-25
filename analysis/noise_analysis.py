@@ -1,16 +1,22 @@
-"""O2 reading noise at 1 Hz: white sensor noise plus a slow real wander (normal lid, fixed flow).
+"""O2 reading at 1 Hz: real trend + white noise + a slow correlated component (normal lid, fixed flow).
 
     python noise_analysis.py      ->  noise_results.json, figures/fig14_noise.png
 
 Record: 15IDC:D1Dmm_calc at 1 Hz, 25 Sep 2026 14:31-15:01 (30 min), normal lid, Alicat setpoint
-0.25 SLPM with Flow_RBV reading 0.24-0.26. O2 rose 0.905 -> 0.932 % over the record, so a cubic
-trend is removed before the noise statistics. The user judges the slow wander to be real O2 (leak /
-temperature), not analyzer drift; this record alone cannot separate the two.
+0.25 SLPM with Flow_RBV reading 0.24-0.26. O2 rose 0.905 -> 0.932 % over the record. That TREND is real
+enclosure O2 (the user's judgement; it also matches the leak model, see below) and is removed with a
+cubic before the noise statistics.
+
+The residual has white noise plus a slow correlated component (tau ~80 s). That component is NOT bulk
+O2: the enclosure's mixing time at 0.25 SLPM is V/F ~ 164 min, so the bulk cannot move 0.7 m% in ~80 s
+(nor step, as at 16.5 min). It is analyzer noise or local mixing at the sensor; either way the
+controller should not chase it. The simulator applies it to the reading only.
 
 Model fitted to the Allan deviation of the detrended record (tau 1-300 s):
     reading = trend + white(sigma_w) + OU(sigma_o, tau_c)
-The same model with the fitted numbers drives the controller simulator (wanderRel, wanderTau, noise).
+The same model with the fitted numbers drives the controller simulator (noise, wanderRel, wanderTau).
 """
+V_L, J_A, J_B_EXP, C_AMB = 41.0, 0.26, 0.04, 19.2   # spec 2.1: volume, normal-lid ingress J = a*F^b (%*L/min), ambient
 import json
 import os
 import numpy as np
@@ -52,6 +58,11 @@ ts, v = ts[keep], v[keep]
 trend = np.polyval(np.polyfit(ts, v, 3), ts)
 res = v - trend
 slope = np.polyfit(ts, v, 1)[0] * 60 * 1000             # m%/min
+# leak-model prediction of the trend at this level and flow: V dC/dt = J(F)*f(C) - F*C
+F_HOLD, C_MEAN = 0.25, float(v.mean())
+f_amb = (C_AMB - C_MEAN) / (C_AMB - 1)
+slope_model = (J_A * F_HOLD ** J_B_EXP * f_amb - F_HOLD * C_MEAN) / V_L * 1000   # m%/min
+j_needed = (slope / 1000 * V_L + F_HOLD * C_MEAN) / (J_A * F_HOLD ** J_B_EXP * f_amb)   # ingress ratio to explain it
 
 white = float(np.std(np.diff(v)) / np.sqrt(2))          # %, first-difference estimate (trend-free)
 ad_det = np.array([adev(res, m) for m in TAUS])
@@ -96,12 +107,16 @@ out = {
     "record": {"file": os.path.basename(O2_1HZ), "samples": int(len(v)), "span_min": round(float(ts[-1]) / 60, 1),
                "level_start_pct": round(float(v[0]), 4), "level_end_pct": round(float(v[-1]), 4),
                "trend_m%_per_min": round(float(slope), 3), "flow": "setpoint 0.25 SLPM, Flow_RBV 0.24-0.26", "lid": "normal"},
+    "trend": {"interpretation": "real enclosure O2 (user)", "measured_m%_per_min": round(float(slope), 3),
+              "leak_model_m%_per_min": round(float(slope_model), 3), "ingress_ratio_needed": round(float(j_needed), 3),
+              "note": "within the x/1.3 seal spread between closures (spec 2.1.4)"},
     "white_noise_m%_per_1Hz_sample": round(white * 1000, 3),
     "residual_std_m%_after_cubic_detrend": round(float(res.std()) * 1000, 3),
     "allan_dev_m%": {int(k): round(float(a) * 1000, 3) for k, a in zip(TAUS, ad_det)},
     "allan_dev_raw_m%": {int(k): round(float(a) * 1000, 3) for k, a in zip(TAUS, ad_raw)},
     "acf": {int(k): round(float(ac_data[k]), 3) for k in (1, 2, 5, 10, 20, 30, 60, 120)},
-    "model": {"white_m%": round(white * 1000, 3), "wander_sigma_m%": round(float(sigma_o) * 1000, 3),
+    "model": {"slow_component": "not bulk O2 (tau << V/F); analyzer or local sensor-zone mixing",
+              "white_m%": round(white * 1000, 3), "wander_sigma_m%": round(float(sigma_o) * 1000, 3),
               "wander_tau_s": round(float(tau_c), 1), "wander_rel_at_record_level": round(float(sigma_o / v.mean()), 6),
               "fit_rms_log_error": round(rms_log, 3), "white_only_rms_log_error": round(err_white, 3), "fit_taus_s": f"1-{FIT_MAX_TAU}"},
     "archive_10s_check": {"windows": len(arch), "median_diff_std_m%": round(arch_med * 1000, 3) if arch_med else None,
@@ -112,15 +127,15 @@ with open(os.path.join(HERE, "noise_results.json"), "w") as f:
 
 # ---------------------------------------------------------------- figure
 fig = plt.figure(figsize=(13, 9.2))
-gs = fig.add_gridspec(3, 2, height_ratios=[1, 1, 0.66], hspace=0.42, wspace=0.22, left=0.07, right=0.98, top=0.895, bottom=0.03)
-fig.text(0.07, 0.975, "O2 reading noise at 1 Hz: white sensor noise + slow real wander", fontsize=13, weight="bold", va="top")
+gs = fig.add_gridspec(3, 2, height_ratios=[1, 1, 0.74], hspace=0.42, wspace=0.22, left=0.07, right=0.98, top=0.895, bottom=0.03)
+fig.text(0.07, 0.975, "O2 at 1 Hz: real trend + white noise + slow correlated component (not bulk O2)", fontsize=13, weight="bold", va="top")
 fig.text(0.07, 0.952, "15IDC:D1Dmm_calc, 25 Sep 2026 14:31-15:01 (30 min), normal lid, Alicat setpoint 0.25 SLPM (Flow_RBV 0.24-0.26)",
          fontsize=9.5, va="top")
 
 ax = fig.add_subplot(gs[0, 0])
 ax.plot(ts / 60, v, lw=0.6, color="0.2", label="reading, 1 Hz")
-ax.plot(ts / 60, trend, lw=1.4, color="tab:red", label=f"cubic trend (mean slope {slope:+.2f} m%/min)")
-ax.set_xlabel("time in record (min)"); ax.set_ylabel("O2 (%)"); ax.set_title("(a) raw record and removed trend", loc="left", fontsize=10)
+ax.plot(ts / 60, trend, lw=1.4, color="tab:red", label=f"cubic trend, real O2 (mean {slope:+.2f} m%/min; leak model {slope_model:+.2f})")
+ax.set_xlabel("time in record (min)"); ax.set_ylabel("O2 (%)"); ax.set_title("(a) raw record; the trend is real enclosure O2", loc="left", fontsize=10)
 ax.legend(fontsize=8, loc="upper left")
 
 ax = fig.add_subplot(gs[0, 1])
@@ -129,7 +144,7 @@ rm = np.convolve(res, np.ones(20) / 20, mode="same") * 1000
 ax.plot(ts / 60, rm, lw=1.3, color="tab:blue", label="20-sample running mean")
 ax.axhline(0, color="k", lw=0.5)
 ax.set_xlabel("time in record (min)"); ax.set_ylabel("residual (m% O2 = 0.001 % O2)")
-ax.set_title("(b) residual after trend removal: fast scatter + slow wander", loc="left", fontsize=10)
+ax.set_title("(b) residual: fast scatter + slow component (not bulk O2)", loc="left", fontsize=10)
 ax.legend(fontsize=8, loc="upper right")
 
 ax = fig.add_subplot(gs[1, 0])
@@ -137,16 +152,16 @@ ax.loglog(TAUS, ad_det * 1000, "o", color="0.15", label="data, detrended")
 ax.loglog(TAUS, ad_raw * 1000, "x", color="0.6", label="data, raw (trend dominates beyond 60 s)")
 ax.loglog(TAUS, white / np.sqrt(TAUS) * 1000, "--", color="tab:gray", label=f"white only ({white*1000:.2f} m%/sqrt(tau)): rms log err {err_white:.2f}")
 ax.loglog(TAUS, ad_fit * 1000, "-", color="tab:red",
-          label=f"white + wander: sigma {sigma_o*1000:.2f} m%, tau {tau_c:.0f} s: rms log err {rms_log:.2f}")
+          label=f"white + slow OU: sigma {sigma_o*1000:.2f} m%, tau {tau_c:.0f} s: rms log err {rms_log:.2f}")
 ax.axvspan(FIT_MAX_TAU, TAUS[-1] * 1.3, color="0.92")
 ax.set_xlim(0.8, TAUS[-1] * 1.3)
 ax.set_xlabel("averaging time tau (s)"); ax.set_ylabel("Allan deviation (m% O2)")
-ax.set_title("(c) averaging stops helping beyond ~10 s: the wander floor", loc="left", fontsize=10)
+ax.set_title("(c) averaging stops helping beyond ~10 s: slow-component floor", loc="left", fontsize=10)
 ax.legend(fontsize=7.5, loc="lower left")
 
 ax = fig.add_subplot(gs[1, 1])
 ax.plot(ACF_LAGS[1:], ac_data[1:], color="0.2", lw=1, label="data, detrended residual")
-ax.plot(ACF_LAGS[1:], ac_model[1:], color="tab:red", lw=1.4, label="model (white + wander)")
+ax.plot(ACF_LAGS[1:], ac_model[1:], color="tab:red", lw=1.4, label="model (white + slow OU)")
 ax.axhline(0, color="k", lw=0.5)
 ax.set_xlabel("lag (s)"); ax.set_ylabel("autocorrelation"); ax.set_ylim(-0.2, 0.6)
 ax.set_title("(d) correlation (check only; model fitted in c)", loc="left", fontsize=10)
@@ -156,13 +171,14 @@ ax.legend(fontsize=8, loc="upper right")
 
 ax = fig.add_subplot(gs[2, :]); ax.axis("off")
 lines = [
-    "NOISE      white (sensor), per 1 Hz sample:  %.2f m%% O2 = %.5f %% O2   (first-difference estimate)" % (white * 1000, white),
-    "WANDER     slow component (believed real O2):  sigma %.2f m%% O2 (%.3f %% of level), correlation time %.0f s   (fit to Allan dev., tau 1-%d s)" % (sigma_o * 1000, 100 * sigma_o / v.mean(), tau_c, FIT_MAX_TAU),
+    "TREND      real enclosure O2 (user): %+.2f m%%/min; leak model predicts %+.2f m%%/min (needs ingress x%.2f, within the x/1.3 seal spread)" % (slope, slope_model, j_needed),
+    "NOISE      white, per 1 Hz sample:  %.2f m%% O2 = %.5f %% O2   (first-difference estimate)" % (white * 1000, white),
+    "SLOW       correlated component: sigma %.2f m%% O2 (%.3f %% of level), correlation time %.0f s   (fit to Allan dev., tau 1-%d s)" % (sigma_o * 1000, 100 * sigma_o / v.mean(), tau_c, FIT_MAX_TAU),
+    "           NOT bulk O2: the box mixes on V/F = %.0f min, so it cannot move this much in ~%.0f s. Analyzer or local sensor-zone mixing." % (V_L / F_HOLD, tau_c),
     "AVERAGING  20-sample mean of the residual: %.2f m%% O2;   Allan deviation floor 10-300 s: %.2f-%.2f m%% O2" % (float(rm.std()), ad_det[(TAUS >= 10) & (TAUS <= 300)].min() * 1000, ad_det[(TAUS >= 10) & (TAUS <= 300)].max() * 1000),
     "ARCHIVE    10 s archive, steady holds near 1 %%: per-sample scatter %s m%% O2 (%d windows);  model predicts %.2f m%% O2" % (f"{arch_med*1000:.2f}" if arch_med else "n/a", len(arch), pred_10s * 1000),
-    "LIMITS     one 30-min record, one lid (normal), one level (~0.92 %), fixed flow. The wander is assumed real (user); this record",
-    "           cannot separate it from analyzer drift. A +2 m% step at 16.5 min (cause unknown) is included in the fit.",
-    "           Taus > %d s (shaded) are shaped by the cubic detrend and are not fitted." % FIT_MAX_TAU,
+    "LIMITS     one 30-min record, one lid (normal), one level (~0.92 %), fixed flow. A +2 m% step at 16.5 min (cause unknown;",
+    "           a bulk step is physically impossible) is included in the fit. Taus > %d s (shaded) are shaped by the cubic detrend." % FIT_MAX_TAU,
     "NOT SHOWN  collimator lid and other O2 levels: no 1 Hz data yet.",
 ]
 for i, s in enumerate(lines):

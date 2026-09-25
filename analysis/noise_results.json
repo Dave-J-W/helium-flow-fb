@@ -9,6 +9,13 @@
   "flow": "setpoint 0.25 SLPM, Flow_RBV 0.24-0.26",
   "lid": "normal"
  },
+ "trend": {
+  "interpretation": "real enclosure O2 (user)",
+  "measured_m%_per_min": 0.833,
+  "leak_model_m%_per_min": 0.409,
+  "ingress_ratio_needed": 1.07,
+  "note": "within the x/1.3 seal spread between closures (spec 2.1.4)"
+ },
  "white_noise_m%_per_1Hz_sample": 0.839,
  "residual_std_m%_after_cubic_detrend": 1.033,
  "allan_dev_m%": {
@@ -58,6 +65,7 @@
   "120": -0.012
  },
  "model": {
+  "slow_component": "not bulk O2 (tau << V/F); analyzer or local sensor-zone mixing",
   "white_m%": 0.839,
   "wander_sigma_m%": 0.67,
   "wander_tau_s": 79.4,
