@@ -503,6 +503,46 @@ allowed_s = |new_setpoint − Flow_RBV| / RampRate_RBV + 5 s
 Alarm if `|Setpoint_RBV − Flow_RBV|` > max(0.05 SLPM, 5 % of setpoint) is still true after
 `allowed_s`. The tolerance is PROVISIONAL.
 
+### 5.1.1 Process-alarm gating: settling logic (ADDED 2026-09-25; replaces a fixed settle time)
+
+The process alarms are "flow ≥ 1.5×/2× expected", "PID pinned at max", "O2 above range /
+abnormally high" and "flow ≤ 0.5× expected (wrong mode?)". Each can be legitimately true while
+the loop is still moving to a new target, so each is gated by the state history. The mismatch,
+hold, lid and purge alarms have their own timing and are not gated.
+
+- **Settling flag.**
+  - **Set** on REGULATE entry and on every target change. It records the direction: O2 falling
+    or rising toward the target.
+  - **Cleared** when O2 reaches the target itself, crossing it in the settling direction ("the
+    flag switches polarity").
+  - After that, any excursion is a disturbance, and the alarms apply normally.
+- **Progress while settling.**
+  - **Slope:** O2 change over `stallWindow` (120 s), using the mean of `slopeAvgN` (20) samples
+    at each end.
+  - **Judging** starts after `stallGrace` (300 s: dead time plus the slope window).
+  - **Stalled:** less than `progressMin` (0.0005 %/min) toward the target for `stallTime`
+    (120 s). A stall **latches** until the target is reached or changed. Once stalled, the
+    alarms apply at once.
+- **Settle timeout.** Still settling after `settleTimeout` (2 h) → MINOR "target not reached",
+  and the alarms apply. This catches a target the loop cannot reach, or reaches only
+  asymptotically.
+- **Steadiness for flow alarms.**
+  - Flow-high and flow-low are judged only when the process is steady: PID output within
+    ±`flowSteadyBand` (0.02 SLPM) over the slope window **and** |O2 slope| <
+    `o2SteadyRate` (0.002 %/min).
+  - A genuine seal or mode problem is steady. The PID winding flow down after a downward target
+    change, or up after a purge, is not.
+- **Persistence.** Flow and O2-range alarms must hold for `flowAlarmDelay` (300 s). Other alarms
+  use `alarmDelay` (10 s).
+- **Simulator results.**
+  - **No false alarms** for target steps 0.99 ↔ 0.5 / 1.5 / 2.0 % on both lids, or for purges
+    from air.
+  - **Real problems still alarm:**
+    - unreachable target (normal lid, seal ×1.3, 0.3 %): timeout, then PID pinned
+    - cracked lid: O2 abnormally high at 15 min, PID pinned at 17 min
+    - collimator lid in mode A: flow ≥ 2× expected after settling
+    - normal lid in collimator mode: wrong mode?
+
 ### 5.2 Expected flow
 
 Model (MEASURED, 2.1.4): C_ss = J(F)/F, with ingress J = a·F^b per lid. So:
@@ -690,7 +730,7 @@ Findings from the first scenario runs, to be decided:
 2. **Alarms need a debounce.** Without one, "O2 above range" toggled MINOR↔MAJOR every second
    at a threshold. The simulator uses `alarmDelay` = 10 s (the level must persist; this is like
    the EPICS `HYST`/delay pattern). Proposed for the real records.
-3. **Flow/O2 alarms need a settle time.** A legitimate target change (0.99 → 0.50 %) saturates
+3. **Flow/O2 alarms need a settle time.** *(Superseded by the settling logic in 5.1.1.)* A legitimate target change (0.99 → 0.50 %) saturates
    the PID at `DRVH` for tens of minutes. That raised "flow ≥ 2× expected", "PID pinned" and "O2
    abnormally high" as MAJOR alarms with nothing wrong. The simulator suppresses these for
    `alarmSettle` = 30 min after feedback-on or a target change. For a 0.99 → 0.50 % change in

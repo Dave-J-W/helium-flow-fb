@@ -262,7 +262,18 @@ function defaultControllerParams() {
     gainSchedule: 1,       // 1 = KP scaled by 0.99/target (mode KP values are "at 0.99 %"); 0 = fixed KP
     flowMinorX: 1.5, flowMajorX: 2.0, flowLowX: 0.5, pinnedTime: 600, o2AbnormalOffset: 0.3,
     alarmDelay: 10,        // s a level must persist before an alarm is raised, changed or cleared (EPICS-style debounce)
-    alarmSettle: 1800,     // s after feedback-on or a target change during which flow/O2/pinned alarms are suppressed
+    // Settling logic (replaces a fixed settle time): after feedback-on or a target change the loop is "settling"
+    // until O2 first enters target ± tol. While settling, flow/O2/pinned alarms are held off only as long as O2
+    // keeps moving toward the target; a stall means a real problem and the alarms apply at once.
+    progressMin: 0.0005,   // %/min toward the target that counts as progress (after stallGrace)
+    stallGrace: 300,       // s after settling starts before progress is judged (dead time + slope window)
+    flowSteadyBand: 0.02,  // SLPM; flow alarms only judge a steady PID output (change over stallWindow within this band)
+    o2SteadyRate: 0.002,   // %/min; ...and a steady O2 (|slope| below this). A real flow problem is steady; settling is not.
+    stallWindow: 120,      // s, slope measured as the O2 change over this window
+    slopeAvgN: 20,         // samples averaged at each end of the slope window (user, 2026-09-25)
+    stallTime: 120,        // s of no progress before a settling loop is treated as stalled
+    settleTimeout: 7200,   // s; still settling after this long = "target not reached" and alarms apply
+    flowAlarmDelay: 300,   // s the flow-high / flow-low condition must persist (the PID winds flow down after settling)
   };
 }
 function defaultPlantParams() {
@@ -421,7 +432,8 @@ class Controller {
     this.lastCmd = null; this.lastCmdTime = 0; this.flowAtCmd = 0;
     this.spSeen = null; this.spChangeT = 0; this.flowAtSpChange = 0;
     this.holdSec = 0; this.holdAttempts = 0; this.nextHoldAttempt = 0; this.holdRecovering = false;
-    this.pinnedSec = 0; this.pinnedLowSec = 0; this.heartbeat = 0; this.deb = {}; this.settleT0 = this.now;
+    this.pinnedSec = 0; this.pinnedLowSec = 0; this.heartbeat = 0; this.deb = {};
+    this.settling = false; this.settleDir = 0; this.stallSec = 0; this.towardRate = 0; this.stallLatched = false; this.ovalHist = []; this.o2Slope = 0;
     this.rbv = this.plant.rbv;
     this.epid = { VAL: this.p.target, CVAL: NaN, KP: 0, KI: 0, KD: 0, DRVL: 0, DRVH: 0, ODEL: this.p.odel,
                   FBON: false, fbonPrev: false, I: 0, P: 0, D: 0, OVAL: 0, ePrev: 0, lastT: null };
@@ -443,17 +455,25 @@ class Controller {
     this.st.log(sev, msg);
   }
   expireAlarms() { for (const [k, a] of this.alarms) if (a.until != null && this.now >= a.until) this.alarms.delete(k); }
-  debounce(key, level, msg1, msg2) {           // level 0/1/2 must persist alarmDelay s before it takes effect
+  debounce(key, level, msg1, msg2, delay) {    // level 0/1/2 must persist `delay` (default alarmDelay) s before it takes effect
     const d = this.deb[key] || (this.deb[key] = { cur: 0, cand: 0, since: this.now });
     if (level !== d.cand) { d.cand = level; d.since = this.now; }
-    if (d.cand !== d.cur && this.now - d.since >= this.p.alarmDelay) {
+    if (d.cand !== d.cur && this.now - d.since >= (delay ?? this.p.alarmDelay)) {
       d.cur = d.cand;
       if (d.cur === 0) this.clearAlarm(key); else this.setAlarm(key, d.cur, d.cur === 2 ? msg2 : msg1);
     }
   }
   setTarget(v, who) {
     this.p.target = v; this.st.log(0, `${who}: O2 target → ${v} %`);
-    if (this.state === 'REGULATE') this.settleT0 = this.now;
+    if (this.state === 'REGULATE') this.startSettling('target change');
+  }
+  startSettling(why) {
+    const p = this.p;
+    this.stallSec = 0; this.stallLatched = false;
+    if (isFinite(this.o2) && Math.abs(this.o2 - p.target) <= p.tol) { this.settling = false; return; }
+    this.settling = true; this.settleT0 = this.now; this.clearAlarm('notReached', true);
+    this.settleDir = isFinite(this.o2) ? Math.sign(p.target - this.o2) : 0;
+    this.st.log(0, `settling (${why}): O2 ${this.settleDir < 0 ? 'falling' : 'rising'} toward ${fmtN(p.target, 3)} %`);
   }
   worstSev() { let s = 0; for (const a of this.alarms.values()) s = Math.max(s, a.sev); return s; }
   override(msg) {
@@ -494,9 +514,9 @@ class Controller {
     const prev = this.state, p = this.p;
     this.state = s; this.sd = { t0: this.now };
     if (s !== 'REGULATE') this.epid.FBON = false;
-    for (const k of ['flowHigh', 'flowLow', 'pinned', 'pinnedLow', 'o2High', 'openLoop']) { this.clearAlarm(k, true); delete this.deb[k]; }
-    this.pinnedSec = 0; this.pinnedLowSec = 0;
-    if (s === 'REGULATE') this.settleT0 = this.now;
+    for (const k of ['flowHigh', 'flowLow', 'pinned', 'pinnedLow', 'o2High', 'openLoop', 'notReached']) { this.clearAlarm(k, true); delete this.deb[k]; }
+    this.pinnedSec = 0; this.pinnedLowSec = 0; this.settling = false;
+    if (s === 'REGULATE') this.startSettling('feedback on');
     this.lastAction = `${s}: ${reason}`;
     this.st.log(0, `${prev || '—'} → ${s} (${reason})`);
     switch (s) {
@@ -548,7 +568,7 @@ class Controller {
     this.lastO2 = v;
     this.frozen = this.sameCount >= p.frozenTime;
     this.o2ok = an.sevr < 3 && v >= p.o2Min && v <= p.o2Max && !this.frozen;
-    this.o2hist.push(v); if (this.o2hist.length > 90) this.o2hist.shift();
+    this.o2hist.push(v); while (this.o2hist.length > Math.max(90, p.stallWindow + p.slopeAvgN + 5)) this.o2hist.shift();
     const n = this.o2hist.length;
     const rate = n > 10 ? (v - this.o2hist[n - 11]) / 10 : 0;            // 10 s difference, %/s
     this.rateHist.push(this.o2ok ? rate : 0);
@@ -664,14 +684,36 @@ class Controller {
       else if (!off) this.clearAlarm('mismatch');
     } else this.clearAlarm('mismatch', true);
     if (s === 'REGULATE') {
-      const settled = this.now - this.settleT0 >= p.alarmSettle;
+      // --- settling flag and progress (slope) check
+      const n = this.o2hist.length, W = Math.round(p.stallWindow), A = Math.round(p.slopeAvgN);
+      if (this.o2ok && n > W + A) {
+        const mean = (end) => { let s = 0; for (let i = end - A + 1; i <= end; i++) s += this.o2hist[i]; return s / A; };
+        const slope = (mean(n - 1) - mean(n - 1 - W)) / W * 60;             // %/min, slopeAvgN-sample means at each end
+        this.o2Slope = slope;
+        this.towardRate = this.o2 < p.target ? slope : -slope;              // positive = moving toward target
+        const judging = this.settling && this.now - this.settleT0 >= p.stallGrace;
+        if (judging && this.towardRate < p.progressMin) this.stallSec++; else if (!this.stallLatched) this.stallSec = 0;
+      }
+      this.ovalHist.push(this.epid.OVAL); while (this.ovalHist.length > W + 1) this.ovalHist.shift();
+      const flowSteady = this.ovalHist.length > W && Math.abs(this.epid.OVAL - this.ovalHist[0]) <= p.flowSteadyBand
+                         && Math.abs(this.o2Slope) < p.o2SteadyRate;
+      // settled once O2 reaches the target itself (crosses it in the settling direction)
+      if (this.settling && this.o2ok && (this.settleDir < 0 ? this.o2 <= p.target : this.settleDir > 0 ? this.o2 >= p.target : Math.abs(this.o2 - p.target) <= p.tol)) {
+        this.settling = false; this.stallLatched = false; this.stallSec = 0; this.clearAlarm('notReached');
+        this.st.log(0, `settled: O2 reached ${fmtN(p.target, 3)} ± ${p.tol} % after ${fmtT(this.now - this.settleT0)}`);
+      }
+      if (this.settling && this.now - this.settleT0 >= p.settleTimeout)
+        this.setAlarm('notReached', 1, `target not reached within ${fmtT(p.settleTimeout)}`);
+      const stalled = this.stallSec >= p.stallTime || (this.settling && this.now - this.settleT0 >= p.settleTimeout);
+      if (this.settling && stalled && !this.stallLatched) { this.stallLatched = true; this.st.log(0, 'settling stalled: O2 no longer approaching the target, process alarms now active'); }
+      const settled = !this.settling || this.stallLatched;                // alarms apply unless making progress
       const ratio = r.flow / this.expectedFlow();
-      this.debounce('flowHigh', !settled ? 0 : ratio >= p.flowMajorX ? 2 : ratio >= p.flowMinorX ? 1 : 0,
-        `flow ≥ ${p.flowMinorX}× expected: check enclosure`, `flow ≥ ${p.flowMajorX}× expected: check enclosure seal`);
+      this.debounce('flowHigh', !(settled && flowSteady) ? 0 : ratio >= p.flowMajorX ? 2 : ratio >= p.flowMinorX ? 1 : 0,
+        `flow ≥ ${p.flowMinorX}× expected: check enclosure`, `flow ≥ ${p.flowMajorX}× expected: check enclosure seal`, p.flowAlarmDelay);
       // Flow well below what the selected mode expects: usually the wrong mode (e.g. collimator mode, normal lid fitted)
       // judged on the PID's demand (OVAL), not the measured flow, so an empty cylinder does not read as "wrong mode"
-      this.debounce('flowLow', settled && this.epid.OVAL / this.expectedFlow() <= p.flowLowX ? 1 : 0,
-        `flow ≤ ${p.flowLowX}× expected: wrong enclosure mode selected?`, '');
+      this.debounce('flowLow', settled && flowSteady && this.epid.OVAL / this.expectedFlow() <= p.flowLowX ? 1 : 0,
+        `flow ≤ ${p.flowLowX}× expected: wrong enclosure mode selected?`, '', p.flowAlarmDelay);
       if (this.epid.OVAL >= this.epid.DRVH - 1e-6) this.pinnedSec++; else this.pinnedSec = 0;
       if (settled && this.pinnedSec >= p.pinnedTime) this.setAlarm('pinned', 2, 'PID pinned at max flow: check enclosure seal');
       else this.clearAlarm('pinned');
@@ -681,7 +723,7 @@ class Controller {
       // O2 below target is not worth an operator alarm (user, 2026-09-25): log it once, no alarm.
       if (settled && this.pinnedLowSec === p.pinnedTime) this.st.log(0, 'note: PID at minimum flow and O2 still below target');
       if (this.o2ok) this.debounce('o2High', !settled ? 0 : this.o2 > p.target + p.o2AbnormalOffset ? 2 : this.o2 > p.target + p.tol ? 1 : 0,
-        'O2 above target range', 'O2 abnormally high');
+        'O2 above target range', 'O2 abnormally high', p.flowAlarmDelay);
     }
   }
   // ---------------- epid record (synApps std, devEpidSoft algorithm)
@@ -1018,7 +1060,7 @@ const ADMIN_FIELDS = [
   F('flowMajorX', 'Flow-high MAJOR threshold', '× exp', 1.1, 10, 0.05),
   F('pinnedTime', 'PID pinned at max → MAJOR after', 's', 30, 7200, 30, true),
   F('o2AbnormalOffset', 'O2 "abnormally high" above target by', '%', 0.02, 5, 0.01),
-  F('alarmSettle', 'Flow/O2 alarms suppressed after feedback-on or target change', 's', 0, 14400, 60, true),
+  F('settleTimeout', 'Target not reached after feedback-on / target change within', 's', 600, 86400, 300, true),
 ];
 const ADMIN_MODE_FIELDS = [
   F('KP', 'epid KP at 0.99 % target (negative; scaled by 0.99/target)', 'SLPM/%', -100, 0, 0.1),
@@ -1061,6 +1103,14 @@ const DEEP_FIELDS = [
   F('odel', 'epid ODEL (output deadband)', 'SLPM', 0, 0.5, 0.005),
   F('gainSchedule', 'Gain scheduling: KP × 0.99/target (1 = on, 0 = off)', '', 0, 1, 1, true),
   F('alarmDelay', 'Alarm debounce (level must persist)', 's', 0, 300, 1, true),
+  F('flowAlarmDelay', 'Flow-high/low and O2-range alarms must persist', 's', 0, 3600, 10, true),
+  F('progressMin', 'Settling: floor on required O2 rate toward target', '%/min', 0.0001, 0.1, 0.0001),
+  F('stallGrace', 'Settling: progress judged only after', 's', 0, 3600, 30, true),
+  F('flowSteadyBand', 'Flow alarms: PID output steady within ± (over slope window)', 'SLPM', 0.001, 1, 0.005),
+  F('o2SteadyRate', 'Flow alarms: O2 steady, |slope| below', '%/min', 0.0001, 0.1, 0.0005),
+  F('stallWindow', 'Slope window (O2 change measured over)', 's', 20, 600, 10, true),
+  F('slopeAvgN', 'Slope: samples averaged at each end of the window', 'samples', 1, 60, 1, true),
+  F('stallTime', 'Settling: no progress for this long = stalled (alarms on)', 's', 10, 1800, 10, true),
 ];
 const DEEP_MODE_FIELDS = [
   F('baseFlow', 'Base flow for 0.99 % O2', 'SLPM', 0.01, 20, 0.01),
@@ -1157,7 +1207,8 @@ function updateModalLive() {
     `epid  FBON ${e.FBON ? 1 : 0}  VAL ${fmtN(e.VAL, 3)}  CVAL ${fmtN(e.CVAL, 4)}  P ${fmtN(e.P, 4)}  I ${fmtN(e.I, 4)}  OVAL ${fmtN(e.OVAL, 3)}  DRVL ${fmtN(e.DRVL, 3)}  DRVH ${fmtN(e.DRVH, 3)}\n` +
     `expected flow ${fmtN(c.expectedFlow(), 3)} SLPM   last commanded ${fmtN(c.lastCmd, 3)} SLPM\n` +
     `lid detector: above-level ${c.aboveCount} s, max rise (60 s) ${fmtN(c.maxRate, 4)} %/s, armed-in-purge ${c.lidArmed}\n` +
-    `hold monitor: on-hold ${c.holdSec} s, attempts ${c.holdAttempts}    O2 ok ${c.o2ok} frozen ${c.frozen}`;
+    `hold monitor: on-hold ${c.holdSec} s, attempts ${c.holdAttempts}    O2 ok ${c.o2ok} frozen ${c.frozen}\n` +
+    `settling ${c.settling}  direction ${c.settleDir}  rate toward target ${fmtN(c.towardRate, 4)} %/min  no-progress ${c.stallSec} s`;
   if ($('ovCount')) $('ovCount').textContent = c.overrideCount;
   if ($('ovList')) $('ovList').textContent = c.overrides.slice(-50).reverse().map(o => `${fmtT(o.t)}  ${o.msg}`).join('\n') || '(none)';
 }
@@ -1302,7 +1353,8 @@ function render() {
   } else if (sk === 'HANDOFF') {
     pr = c.sd.phase === 'settle' ? 'waiting for flow to settle at expected' : `feedback on in ${fmtT(p.fbDelay - (c.now - c.sd.t1))}`;
   } else if (sk === 'REGULATE') {
-    pr = `PID: CVAL ${fmtN(c.epid.CVAL, 3)} %  P ${fmtN(c.epid.P, 3)}  I ${fmtN(c.epid.I, 3)}  out ${fmtN(c.epid.OVAL, 3)} [${fmtN(c.epid.DRVL, 2)}…${fmtN(c.epid.DRVH, 2)}]`;
+    pr = (c.settling ? `SETTLING ${c.settleDir < 0 ? '↓' : '↑'} to ${fmtN(p.target, 2)} %  (${fmtN(c.towardRate, 3)} %/min toward${c.stallSec >= p.stallTime ? ', STALLED' : ''})\n` : '') +
+         `PID: CVAL ${fmtN(c.epid.CVAL, 3)} %  P ${fmtN(c.epid.P, 3)}  I ${fmtN(c.epid.I, 3)}  out ${fmtN(c.epid.OVAL, 3)} [${fmtN(c.epid.DRVL, 2)}…${fmtN(c.epid.DRVH, 2)}]`;
   }
   $('progress').textContent = pr || ' ';
   $('lastAction').textContent = c.down ? '—' : c.lastAction;
