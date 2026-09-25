@@ -1,0 +1,1316 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>15LSS_sample_gas: helium purge / O2 feedback simulator</title>
+<style>
+  :root { --bg:#d9d9d9; --panel:#ececec; --edge:#9a9a9a; --minor:#f2c200; --major:#e01b1b; --invalid:#c000c0; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family:"Segoe UI", Arial, sans-serif; font-size:13px; background:var(--bg); color:#111; }
+  header { display:flex; align-items:center; gap:14px; padding:6px 10px; background:#2f3b4c; color:#fff; flex-wrap:wrap; }
+  header .title { font-weight:600; font-size:15px; }
+  header .sub { font-weight:400; font-size:11px; opacity:.75; margin-left:6px; }
+  .tabs { display:flex; gap:4px; }
+  .tab { background:#46546a; color:#fff; border:1px solid #6b7a91; padding:4px 10px; cursor:pointer; border-radius:3px; display:flex; gap:6px; align-items:center; }
+  .tab.active { background:#f0f0f0; color:#111; }
+  .dot { width:10px; height:10px; border-radius:50%; display:inline-block; border:1px solid #333; background:#4caf50; }
+  .timectl { display:flex; gap:6px; align-items:center; margin-left:auto; }
+  .timectl button, .timectl select { font-size:13px; }
+  #clock { font-family:Consolas,monospace; font-size:15px; background:#111; color:#7CFC00; padding:2px 8px; border-radius:3px; }
+  main { display:grid; grid-template-columns: 340px 1fr 320px; gap:8px; padding:8px; height: calc(100vh - 44px - 190px); min-height:560px; }
+  .col { overflow:auto; }
+  .panel { background:var(--panel); border:1px solid var(--edge); border-radius:4px; padding:8px; margin-bottom:8px; }
+  .panelTitle { font-weight:600; background:#3c4a5e; color:#fff; margin:-8px -8px 8px; padding:5px 8px; border-radius:4px 4px 0 0; font-size:13px; }
+  .panelTitle .pv { font-family:Consolas,monospace; font-weight:400; opacity:.85; }
+  .banner { padding:6px 8px; border-radius:3px; margin-bottom:8px; font-weight:600; min-height:30px; background:#cfe8cf; border:1px solid #7bb07b; }
+  .banner.minor { background:#fff3b0; border-color:var(--minor); }
+  .banner.major { background:#ffd0d0; border-color:var(--major); color:#7a0000; }
+  .banner div { font-weight:600; }
+  .readouts { display:grid; grid-template-columns:1fr 1fr; gap:6px; }
+  .ro { background:#111; color:#e8e8e8; border-radius:4px; padding:6px 8px; border:2px solid #111; }
+  .ro .lbl { font-size:11px; color:#aab; }
+  .ro .val { font-family:Consolas,monospace; font-size:26px; color:#7CFC00; line-height:1.1; }
+  .ro .unit { font-size:11px; color:#aab; }
+  .ro .extra { font-size:10px; color:#889; font-family:Consolas,monospace; }
+  .ro.minor { border-color:var(--minor); } .ro.major { border-color:var(--major); } .ro.invalid { border-color:var(--invalid); }
+  .ro.invalid .val { color:#ff66ff; } .ro.na .val { color:#777; }
+  .stateRow { margin:8px 0 4px; display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
+  .badge { color:#fff; padding:2px 8px; border-radius:3px; font-weight:600; font-family:Consolas,monospace; }
+  .led { width:14px; height:14px; border-radius:50%; display:inline-block; border:1px solid #333; background:#777; }
+  .progress { font-size:12px; font-family:Consolas,monospace; background:#fff; border:1px solid #bbb; padding:4px 6px; margin:4px 0; min-height:22px; }
+  .ctrls { display:grid; grid-template-columns:auto 1fr; gap:4px 6px; align-items:center; margin:6px 0; }
+  .ctrls input, .ctrls select { width:100%; }
+  .btns { display:flex; gap:6px; margin:6px 0; }
+  .btns button { flex:1; padding:9px 4px; font-size:14px; font-weight:600; cursor:pointer; }
+  button.purge { background:#cfe0f5; } button.zero { background:#f5d0d0; } button.resume { background:#d6efd0; }
+  button:disabled { opacity:.45; cursor:default; }
+  .small { font-size:11px; color:#444; }
+  .adminBtn { width:100%; margin-top:6px; padding:6px; cursor:pointer; }
+  .charts { display:flex; flex-direction:column; gap:4px; }
+  .chartBar { display:flex; gap:10px; align-items:center; background:var(--panel); border:1px solid var(--edge); padding:4px 8px; border-radius:4px; flex-wrap:wrap; }
+  canvas { width:100%; background:#f7f7f7; border:1px solid var(--edge); border-radius:3px; display:block; }
+  #cO2 { height:34%; } #cFlow { height:30%; } #cCyl { height:16%; } #cState { height:34px; }
+  .world h4 { margin:8px 0 4px; font-size:12px; border-bottom:1px solid #bbb; }
+  .world .row { display:flex; gap:4px; flex-wrap:wrap; margin-bottom:4px; align-items:center; }
+  .world button { cursor:pointer; padding:3px 6px; font-size:12px; }
+  .world .status { font-family:Consolas,monospace; font-size:11px; background:#fff; border:1px solid #bbb; padding:4px 6px; white-space:pre; }
+  .simTag { background:#7a5c00; color:#fff; font-size:10px; padding:1px 5px; border-radius:3px; margin-left:4px; }
+  #scDesc { font-size:11.5px; background:#fffbe6; border:1px solid #e0d090; padding:5px 6px; margin-top:4px; white-space:pre-wrap; }
+  details summary { cursor:pointer; font-weight:600; font-size:12px; }
+  .pgrid { display:grid; grid-template-columns: 1fr 78px 44px; gap:2px 4px; align-items:center; font-size:11.5px; margin-top:4px; }
+  .pgrid input { width:78px; font-size:11.5px; }
+  #logPanel { height:182px; margin:0 8px 8px; background:#fff; border:1px solid var(--edge); border-radius:4px; display:flex; flex-direction:column; }
+  .logHead { padding:3px 8px; background:#3c4a5e; color:#fff; display:flex; gap:12px; align-items:center; }
+  #log { overflow:auto; font-family:Consolas,monospace; font-size:11.5px; padding:2px 8px; flex:1; }
+  #log .l1 { background:#fff6c7; } #log .l2 { background:#ffdede; color:#800; } #log .l3 { background:#f9d6f9; }
+  #log .world { color:#6b5500; font-style:italic; }
+  .modal { position:fixed; inset:0; background:rgba(0,0,0,.35); display:flex; align-items:flex-start; justify-content:center; padding-top:40px; z-index:10; }
+  .hidden { display:none !important; }
+  .modalBox { background:var(--panel); border:1px solid #555; border-radius:5px; width:min(900px, 95vw); max-height:86vh; overflow:auto; box-shadow:0 6px 24px rgba(0,0,0,.4); }
+  .modalHead { background:#3c4a5e; color:#fff; padding:6px 10px; display:flex; justify-content:space-between; align-items:center; position:sticky; top:0; }
+  .modalHead button { font-size:16px; cursor:pointer; }
+  #modalBody { padding:10px; }
+  .fgrid { display:grid; grid-template-columns: 1fr 110px 60px 120px; gap:3px 8px; align-items:center; }
+  .fgrid .h { font-weight:600; border-bottom:1px solid #999; }
+  .fgrid input { width:110px; }
+  .lim { font-size:10.5px; color:#666; }
+  .flash { background:#ffd0d0 !important; }
+  table.mt { border-collapse:collapse; margin:6px 0; }
+  table.mt td, table.mt th { border:1px solid #bbb; padding:3px 6px; font-size:12px; }
+  table.mt input { width:90px; }
+  .internals { font-family:Consolas,monospace; font-size:11.5px; background:#fff; border:1px solid #bbb; padding:6px; white-space:pre; }
+  .note { font-size:11.5px; color:#444; background:#f4f4f4; border-left:3px solid #999; padding:4px 8px; margin:6px 0; }
+</style>
+</head>
+<body>
+<header>
+  <div class="title">15LSS_sample_gas: helium purge / O2 feedback simulator
+    <span class="sub">executable version of the 2026-09-24 design spec, not IOC code</span></div>
+  <div class="tabs" id="stationTabs"></div>
+  <div class="timectl">
+    <button id="btnPlay" title="Pause / run">⏸ Pause</button>
+    <button id="btnStep" title="Advance 10 s of simulated time">+10 s</button>
+    <label>Speed <select id="speed">
+      <option value="1">1×</option><option value="10">10×</option><option value="60" selected>60×</option>
+      <option value="300">300×</option><option value="1000">1000×</option><option value="3000">3000×</option>
+    </select></label>
+    <span id="clock">0:00:00</span>
+  </div>
+</header>
+
+<main>
+  <!-- ============ Operator GUI (what the Phoebus main panel would show) ============ -->
+  <section class="col">
+    <div class="panel">
+      <div class="panelTitle">Sample gas <span class="pv" id="pvPrefix"></span></div>
+      <div id="banner" class="banner">No alarms</div>
+      <div class="readouts">
+        <div class="ro" id="roO2Box"><div class="lbl">Oxygen</div><div class="val" id="roO2">–</div><div class="unit">% O2</div><div class="extra" id="roO2x"></div></div>
+        <div class="ro" id="roFlowBox"><div class="lbl">Helium flow</div><div class="val" id="roFlow">–</div><div class="unit">SLPM (Flow_RBV)</div><div class="extra" id="roFlowx"></div></div>
+        <div class="ro" id="roSPBox"><div class="lbl">Flow setpoint</div><div class="val" id="roSP">–</div><div class="unit">SLPM (Setpoint_RBV)</div><div class="extra" id="roSPx"></div></div>
+        <div class="ro" id="roCylBox"><div class="lbl">Cylinder pressure</div><div class="val" id="roCyl">–</div><div class="unit">psi</div><div class="extra" id="roCylx"></div></div>
+      </div>
+      <div class="stateRow">State <span class="badge" id="stateBadge">–</span>
+        <span class="led" id="ledRange"></span><span id="rangeTxt">in range</span></div>
+      <div class="small" id="stateDesc"></div>
+      <div class="progress" id="progress"></div>
+      <div class="ctrls">
+        <label for="selMode">Enclosure mode</label><select id="selMode"></select>
+        <label for="inTarget">O2 target (%)</label><input id="inTarget" type="number" step="0.01" min="0.2" max="5">
+      </div>
+      <div class="btns">
+        <button class="purge" id="btnPurge">Purge</button>
+        <button class="zero" id="btnZero">Flow Zero</button>
+        <button class="resume" id="btnResume">Resume PID</button>
+      </div>
+      <div class="small">Last action: <span id="lastAction"></span></div>
+      <button class="adminBtn" id="btnAdmin">Admin settings…</button>
+    </div>
+    <div class="note">This column is the <b>user main panel</b> (spec §7.0). The graphs are its trend plot, enlarged.
+      The right-hand column is the <b>physical world</b>. It is not part of the real GUI; it lets you change the enclosure, MFC, analyzer and IOC.</div>
+  </section>
+
+  <!-- ============ Trends ============ -->
+  <section class="col charts">
+    <div class="chartBar">
+      <label>Window <select id="win">
+        <option value="600">10 min</option><option value="1800">30 min</option><option value="3600" selected>1 h</option>
+        <option value="14400">4 h</option><option value="43200">12 h</option><option value="0">all</option>
+      </select></label>
+      <label><input type="checkbox" id="logO2" checked> log O2 axis</label>
+      <label><input type="checkbox" id="logFlow" checked> log flow axis</label>
+      <label><input type="checkbox" id="showBulk" checked> true bulk O2 <span class="simTag">sim only</span></label>
+    </div>
+    <canvas id="cO2"></canvas>
+    <canvas id="cFlow"></canvas>
+    <canvas id="cCyl"></canvas>
+    <canvas id="cState"></canvas>
+  </section>
+
+  <!-- ============ Physical world (simulator only) ============ -->
+  <section class="col world">
+    <div class="panel">
+      <div class="panelTitle">Physical world <span class="simTag">simulator only</span></div>
+      <div class="status" id="worldStatus"></div>
+      <h4>Enclosure lid</h4>
+      <div class="row"><button id="wClose">Close lid</button><button id="wLift">Lift lid</button><button id="wCrack">Crack lid (slow leak)</button></div>
+      <div class="row"><label>Lid fitted <select id="wLidType"><option value="A">Normal lid</option><option value="B">Collimator lid</option></select></label>
+        <button id="wReseat" title="Random seal quality ×/÷1.3, as measured between closures">Re-seat (random seal)</button></div>
+      <h4>Alicat MFC</h4>
+      <div class="row"><button id="wHold">Hold valve (current)</button><button id="wHoldOpen">Hold valve 100 %</button><button id="wHoldStuck">Stuck hold</button><button id="wUnhold">Clear hold</button></div>
+      <div class="row"><label>Ramp <input id="wRamp" type="number" step="0.5" min="0" style="width:60px"> SLPM/s</label><button id="wRampSet">Set</button>
+        <label>Gas <select id="wGas"><option>He</option><option>Air</option><option>N2</option></select></label></div>
+      <h4>Helium cylinder</h4>
+      <div class="row"><button id="wRefill">Refill (2000 psi)</button><button id="wLow">Nearly empty (120 psi)</button><button id="wEmpty">Empty</button>
+        <label><input type="checkbox" id="wCylPv" checked> cylinder PV exists</label></div>
+      <h4>O2 analyzer</h4>
+      <div class="row"><label><input type="radio" name="an" value="normal" checked> normal</label>
+        <label><input type="radio" name="an" value="frozen"> frozen value</label>
+        <label><input type="radio" name="an" value="invalid"> INVALID</label>
+        <button id="wDip" title="Ambient O2 dips 0.6 % for 1 min (breath, He pocket)">Breath dip</button></div>
+      <h4>Controller IOC</h4>
+      <div class="row"><button id="wCrash">Crash IOC</button><button id="wRestart">Restart IOC (start_ioc)</button></div>
+      <h4>Scenarios (spec §8)</h4>
+      <div class="row"><select id="scSel" style="width:100%"></select></div>
+      <div class="row"><button id="scRun">Reset station &amp; run scenario</button><button id="scReset">Reset station</button></div>
+      <div id="scDesc"></div>
+      <details style="margin-top:8px"><summary>Plant model parameters <span class="simTag">sim only</span></summary>
+        <div class="pgrid" id="plantGrid"></div></details>
+    </div>
+  </section>
+</main>
+
+<section id="logPanel">
+  <div class="logHead">Event log
+    <label><input type="checkbox" id="logBoth"> show both stations</label>
+    <span style="font-size:11px;opacity:.8">MINOR = yellow, MAJOR = red. Times are the station's simulated clock.</span></div>
+  <div id="log"></div>
+</section>
+
+<div id="modal" class="modal hidden"><div class="modalBox">
+  <div class="modalHead"><span id="modalTitle"></span><button id="modalClose">×</button></div>
+  <div id="modalBody"></div>
+</div></div>
+
+<script>
+'use strict';
+// =====================================================================================
+//  Helpers
+// =====================================================================================
+const $ = id => document.getElementById(id);
+const clamp = (x, a, b) => Math.min(b, Math.max(a, x));
+const DT = 0.25;                 // physics step, s
+const STEPS_PER_S = Math.round(1 / DT);
+const HIST_EVERY = 2;            // chart sample interval, s
+const HIST_CAP = 70000;
+let _g = null;
+function gauss() {
+  if (_g !== null) { const v = _g; _g = null; return v; }
+  let u = 0; while (u === 0) u = Math.random();
+  const v = Math.random(), r = Math.sqrt(-2 * Math.log(u));
+  _g = r * Math.sin(2 * Math.PI * v); return r * Math.cos(2 * Math.PI * v);
+}
+function fmtT(s) {
+  s = Math.max(0, Math.round(s));
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), x = s % 60;
+  return `${h}:${String(m).padStart(2, '0')}:${String(x).padStart(2, '0')}`;
+}
+const fmtN = (v, d = 2) => (v == null || !isFinite(v)) ? '–' : Number(v).toFixed(d);
+const SEV_NAME = ['', 'MINOR', 'MAJOR', 'INVALID'];
+
+const STATES = {
+  IDLE:      { color: '#8a8a8a', desc: 'Controller is not managing the flow.' },
+  PRECHECK:  { color: '#8e7cc3', desc: 'Checking and correcting MFC settings before the purge (§4.1).' },
+  PURGE:     { color: '#2f6fbf', desc: 'Purging at full flow until O2 < target − Δ (§4.2).' },
+  HANDOFF:   { color: '#4f9aa8', desc: 'Stepping down to the expected flow, then enabling feedback (§4.4).' },
+  REGULATE:  { color: '#4c9a2a', desc: 'epid is holding O2 at the target (§4.5).' },
+  OPEN_LOOP: { color: '#e08a1e', desc: 'O2 unavailable: fixed expected flow, no feedback (§4.3, §5).' },
+  FLOW_ZERO: { color: '#555555', desc: 'Flow stopped by the operator.' },
+  OPEN_STOP: { color: '#c00000', desc: 'Enclosure confirmed open: flow stopped to save helium (§4.6).' },
+  IOC_DOWN:  { color: '#000000', desc: 'Controller IOC is not running. The Alicat holds its last setpoint.' },
+};
+const STATE_KEYS = Object.keys(STATES);
+
+// =====================================================================================
+//  Parameters
+// =====================================================================================
+function defaultControllerParams() {
+  return {
+    target: 0.99, tol: 0.02, delta: 0.15, mode: 'A',
+    modes: {
+      A: { name: 'Normal lid', baseFlow: 0.25, n: 1.0, KP: -9.3, KI: 8.8e-4, drvh: 1.0 },
+      B: { name: 'Collimator lid', baseFlow: 0.84, n: 0.53, KP: -10, KI: 1.4e-3, drvh: 2.0 },   // retuned 2026-09-25 (was −4.4 / 8.8e-4)
+    },
+    purgeFlow: 20, purgeTimeout: 390, dropSkipLevel: 18,
+    V: 41,                 // L, enclosure volume: sets the lid-on purge decay rate F/V
+    kinT1: 20,             // s after full flow: start of the decay-rate window
+    dropCheckTime: 60,     // s after full flow: end of the window, where the lid decision is made
+    openSlopeFrac: 0.5,    // lid judged open if the measured decay rate < this fraction of F/V
+    handoffHold: 15, handoffFlowTol: 0.05, fbDelay: 120,
+    lidLevel: 10, lidFilter: 5, lidSlope: 0.2, lidSlopeWindow: 60, lidArmLevel: 9,
+    rampMaxPurge: 5, rampMinHandoff: 2,
+    hardCeiling: 2.0, drvlFrac: 0.5, drvlMin: 0.1,
+    mismatchAbs: 0.05, mismatchFrac: 0.05, mismatchMargin: 5,
+    holdDetect: 3, holdRetries: 3, holdRetryInterval: 10, holdSlowRetry: 60,
+    frozenTime: 30, o2Min: -0.5, o2Max: 25,
+    avgN: 10, pidScan: 10, odel: 0.01,
+    flowMinorX: 1.5, flowMajorX: 2.0, pinnedTime: 600, o2AbnormalOffset: 0.3,
+    alarmDelay: 10,        // s a level must persist before an alarm is raised, changed or cleared (EPICS-style debounce)
+    alarmSettle: 1800,     // s after feedback-on or a target change during which flow/O2/pinned alarms are suppressed
+  };
+}
+function defaultPlantParams() {
+  return {
+    V: 41,                                   // L (MEASURED 40.4–42.2)
+    ingressA_a: 0.26, ingressA_b: 0.04,      // normal lid: J = a·F^b  [%·L/min]
+    ingressB_a: 0.71, ingressB_b: -0.87,     // collimator lid
+    ingressFmin: 0.2,                        // SLPM floor for the power laws
+    kOffA: 0.00142, kOffB: 0.005,            // /min, flow off, lid on (B unmeasured)
+    crackIngress: 3.0,                       // %·L/min extra with a cracked lid
+    openTau: 5.75,                           // s, lid-lift time constant (MEASURED)
+    openMix: 1.0,                            // multiplier on open-lid air exchange (open box at 20 SLPM unmeasured)
+    zoneTauHold: 65,                         // s, sensor-zone lag at hold flow (MEASURED)
+    delayA: 9, delayB: 17.7, delayMax: 75,   // transport delay = min(max, A + B/F) s
+    ambientBase: 19.2, ambientPeak: 19.5, ambientRelax: 1800,
+    noise: 0.001,                            // % per 1 Hz sample
+    alicatTau: 0.5, alicatRes: 0.01, alicatMax: 20, holdOpenFlow: 0.7,
+    cylP0: 2000, cylLitersPerPsi: 4.25, cylPempty: 30, cylPfull: 150,
+  };
+}
+
+// =====================================================================================
+//  Plant: enclosure + O2 analyzer + Alicat + cylinder
+// =====================================================================================
+class Plant {
+  constructor(pp) { this.pp = pp; this.reset(); }
+  reset() {
+    const pp = this.pp;
+    this.t = 0;
+    this.lid = 'closed'; this.lidType = 'A'; this.crack = false; this.seal = 1.0;
+    this.lastLift = -1e9; this.dipUntil = -1;
+    const amb = this.ambient();
+    this.C = amb; this.zone = amb;
+    this.histLen = Math.ceil(200 / DT);
+    this.hist = new Float64Array(this.histLen).fill(amb); this.hi = 0;
+    this.dEff = pp.delayMax; this.delayed = amb;
+    this.a = { spVal: 0, spDev: 0, spRamped: 0, flow: 0, running: true, stuck: false, holdFlow: 0, ramp: 3, gas: 'He' };
+    this.cylP = pp.cylP0; this.cylPresent = true;
+    this.an = { mode: 'normal', value: amb, sevr: 0 };
+    this.rbv = { flow: 0, sp: 0, running: true, ramp: 3, gas: 'He', units: 'SLPM' };
+  }
+  ambient() {
+    const pp = this.pp;
+    let a = pp.ambientBase + (pp.ambientPeak - pp.ambientBase) * Math.exp(-(this.t - this.lastLift) / pp.ambientRelax);
+    if (this.t < this.dipUntil) a -= 0.6;
+    return a;
+  }
+  ingress(F) {
+    const pp = this.pp, Fe = Math.max(F, pp.ingressFmin);
+    const J = this.lidType === 'A' ? pp.ingressA_a * Math.pow(Fe, pp.ingressA_b) : pp.ingressB_a * Math.pow(Fe, pp.ingressB_b);
+    return J * this.seal;
+  }
+  cylCapacity() {
+    const pp = this.pp;
+    return pp.alicatMax * clamp((this.cylP - pp.cylPempty) / (pp.cylPfull - pp.cylPempty), 0, 1);
+  }
+  step(dt) {
+    const pp = this.pp, a = this.a;
+    // --- Alicat: ramp toward the device setpoint unless the valve is held
+    let tgt;
+    if (a.running) {
+      if (a.ramp <= 0) a.spRamped = a.spDev;
+      else { const s = a.ramp * dt; a.spRamped += clamp(a.spDev - a.spRamped, -s, s); }
+      tgt = a.spRamped;
+    } else tgt = a.holdFlow;
+    tgt = Math.min(tgt, this.cylCapacity());
+    a.flow += (tgt - a.flow) * Math.min(1, dt / pp.alicatTau);
+    if (a.flow < 1e-4) a.flow = 0;
+    this.cylP = Math.max(0, this.cylP - a.flow * dt / 60 / pp.cylLitersPerPsi);
+    // --- Enclosure O2 (well-mixed bulk, spec §2.1.1)
+    const F = a.flow, V = pp.V, amb = this.ambient();
+    let dC;
+    if (this.lid === 'open') {
+      dC = pp.openMix * (amb - this.C) / pp.openTau - (F / 60) * this.C / V;
+    } else {
+      const f = Math.max(0, (amb - this.C) / (amb - 1));      // ingress shrinks as C approaches ambient
+      const crackJ = this.crack ? pp.crackIngress * f : 0;
+      if (F < 0.05) dC = (pp[this.lidType === 'A' ? 'kOffA' : 'kOffB'] / 60) * (amb - this.C) + crackJ / V / 60;
+      else dC = ((this.ingress(F) * f + crackJ) - F * this.C) / V / 60;
+    }
+    this.C = clamp(this.C + dC * dt, 0, 21);
+    // --- Sensor zone lag (§2.1.5) and transport delay (§2.1.3)
+    const tz = this.lid === 'open' ? 2 : Math.max(3, pp.zoneTauHold * Math.min(1, 0.25 / Math.max(F, 0.01)));
+    this.zone += (this.C - this.zone) * Math.min(1, dt / tz);
+    this.hi = (this.hi + 1) % this.histLen; this.hist[this.hi] = this.zone;
+    const dWant = this.lid === 'open' ? 2 : Math.min(pp.delayMax, pp.delayA + pp.delayB / Math.max(F, 0.2));
+    if (dWant < this.dEff) this.dEff = dWant; else this.dEff = Math.min(dWant, this.dEff + 0.5 * dt);
+    const lag = Math.min(this.histLen - 1, Math.round(this.dEff / DT));
+    this.delayed = this.hist[(this.hi - lag + this.histLen) % this.histLen];
+  }
+  sampleAnalyzer() {                         // 1 Hz
+    const an = this.an;
+    if (an.mode === 'normal') { an.value = this.delayed + this.pp.noise * gauss(); an.sevr = 0; }
+    else if (an.mode === 'invalid') an.sevr = 3;
+    // 'frozen': value and severity stay exactly as they were
+  }
+  pollAlicat() {                             // stream poll: Flow_RBV, Setpoint_RBV, Running_RBV, RampRate_RBV, Gas_RBV
+    const a = this.a, r = this.rbv;
+    r.flow = Math.round(a.flow * 100) / 100; r.sp = a.spDev; r.running = a.running; r.ramp = a.ramp; r.gas = a.gas;
+  }
+  // ---- Channel Access puts from the controller
+  putSetpoint(v) {                           // Setpoint record has SDIS=Running_RBV, DISV=0
+    const a = this.a;
+    a.spVal = Math.round(v / this.pp.alicatRes) * this.pp.alicatRes;
+    if (a.running) a.spDev = a.spVal;        // otherwise VAL changes but nothing reaches the device
+    return a.running;
+  }
+  putRun() {                                 // "C": cancel hold; device resumes its own (old) setpoint
+    const a = this.a;
+    if (a.stuck) return false;
+    if (!a.running) { a.running = true; a.spRamped = a.flow; }
+    return true;
+  }
+  putRamp(v) { this.a.ramp = v; }
+  // ---- World actions
+  hold(kind) {
+    const a = this.a;
+    a.running = false; a.stuck = (kind === 'stuck');
+    a.holdFlow = kind === 'open' ? this.pp.holdOpenFlow : a.flow;
+  }
+  clearHold() { this.a.stuck = false; this.putRun(); }
+  liftLid() { if (this.lid !== 'open') { this.lid = 'open'; this.crack = false; this.lastLift = this.t; } }
+  closeLid() { this.lid = 'closed'; this.crack = false; }
+  crackLid() { this.lid = 'closed'; this.crack = true; }
+  reseat() { this.seal = clamp(Math.exp(Math.log(1.3) * gauss()), 0.6, 1.8); }
+  steadyAt(F) {                              // O2 steady state for a given flow (lid closed)
+    let C = 1;
+    for (let i = 0; i < 60; i++) { const amb = this.ambient(); const f = Math.max(0, (amb - C) / (amb - 1)); C = this.ingress(F) * f / F; }
+    return C;
+  }
+  setO2Everywhere(C) {
+    this.C = C; this.zone = C; this.hist.fill(C); this.delayed = C; this.an.value = C; this.an.sevr = 0;
+  }
+}
+
+// =====================================================================================
+//  Controller: the spec's state machine + epid (§4–§6)
+// =====================================================================================
+class Controller {
+  constructor(st) {
+    this.st = st; this.p = defaultControllerParams();
+    this.overrideCount = 0; this.overrides = [];
+    this.reinit(); this.enter('IDLE', 'IOC started');
+  }
+  get plant() { return this.st.plant; }
+  reinit() {
+    this.now = this.st.t; this.down = false; this.downSince = null; this.state = null; this.sd = {};
+    this.alarms = new Map(); this.lastAction = '';
+    this.o2 = NaN; this.o2ok = false; this.lastO2 = NaN; this.sameCount = 0; this.frozen = false;
+    this.o2hist = []; this.rateHist = []; this.maxRate = 0; this.aboveCount = 0; this.lidArmed = false;
+    this.avgBuf = []; this.blind = false;
+    this.lastCmd = null; this.lastCmdTime = 0; this.flowAtCmd = 0;
+    this.holdSec = 0; this.holdAttempts = 0; this.nextHoldAttempt = 0; this.holdRecovering = false;
+    this.pinnedSec = 0; this.heartbeat = 0; this.deb = {}; this.settleT0 = this.now;
+    this.rbv = this.plant.rbv;
+    this.epid = { VAL: this.p.target, CVAL: NaN, KP: 0, KI: 0, KD: 0, DRVL: 0, DRVH: 0, ODEL: this.p.odel,
+                  FBON: false, fbonPrev: false, I: 0, P: 0, D: 0, OVAL: 0, ePrev: 0, lastT: null };
+  }
+  // ---------------- alarms
+  setAlarm(key, sev, msg) {
+    const cur = this.alarms.get(key);
+    if (!cur || cur.sev !== sev || cur.msg !== msg) {
+      this.alarms.set(key, { sev, msg, since: this.now, until: null });
+      this.st.log(sev, msg);
+    }
+  }
+  clearAlarm(key, silent) {
+    const a = this.alarms.get(key);
+    if (a) { this.alarms.delete(key); if (!silent) this.st.log(0, `cleared: ${a.msg}`); }
+  }
+  latch(key, sev, msg, dur = 300) {
+    this.alarms.set(key, { sev, msg, since: this.now, until: this.now + dur });
+    this.st.log(sev, msg);
+  }
+  expireAlarms() { for (const [k, a] of this.alarms) if (a.until != null && this.now >= a.until) this.alarms.delete(k); }
+  debounce(key, level, msg1, msg2) {           // level 0/1/2 must persist alarmDelay s before it takes effect
+    const d = this.deb[key] || (this.deb[key] = { cur: 0, cand: 0, since: this.now });
+    if (level !== d.cand) { d.cand = level; d.since = this.now; }
+    if (d.cand !== d.cur && this.now - d.since >= this.p.alarmDelay) {
+      d.cur = d.cand;
+      if (d.cur === 0) this.clearAlarm(key); else this.setAlarm(key, d.cur, d.cur === 2 ? msg2 : msg1);
+    }
+  }
+  setTarget(v, who) {
+    this.p.target = v; this.st.log(0, `${who}: O2 target → ${v} %`);
+    if (this.state === 'REGULATE') this.settleT0 = this.now;
+  }
+  worstSev() { let s = 0; for (const a of this.alarms.values()) s = Math.max(s, a.sev); return s; }
+  override(msg) {
+    this.overrideCount++; this.overrides.push({ t: this.now, msg });
+    this.lastAction = msg; this.latch('override', 1, `override: ${msg}`);
+  }
+  // ---------------- helpers
+  expectedFlow() { const m = this.p.modes[this.p.mode]; return m.baseFlow * Math.pow(0.99 / this.p.target, m.n); }
+  command(v) {
+    v = Math.max(0, v);
+    if (this.lastCmd == null || Math.abs(v - this.lastCmd) > 1e-9) { this.lastCmd = v; this.lastCmdTime = this.now; this.flowAtCmd = this.rbv.flow; }
+    this.plant.putSetpoint(v);
+  }
+  configEpid() {
+    const e = this.epid, p = this.p, m = p.modes[p.mode], exp = this.expectedFlow();
+    e.VAL = p.target; e.KP = m.KP; e.KI = m.KI; e.ODEL = p.odel;
+    e.DRVH = Math.min(m.drvh, p.hardCeiling);
+    e.DRVL = Math.min(e.DRVH, Math.max(p.drvlMin, p.drvlFrac * exp));
+  }
+  // ---------------- state entry
+  enter(s, reason) {
+    const prev = this.state, p = this.p;
+    this.state = s; this.sd = { t0: this.now };
+    if (s !== 'REGULATE') this.epid.FBON = false;
+    for (const k of ['flowHigh', 'pinned', 'o2High', 'openLoop']) { this.clearAlarm(k, true); delete this.deb[k]; }
+    this.pinnedSec = 0;
+    if (s === 'REGULATE') this.settleT0 = this.now;
+    this.lastAction = `${s}: ${reason}`;
+    this.st.log(0, `${prev || '—'} → ${s} (${reason})`);
+    switch (s) {
+      case 'PRECHECK':
+        this.clearAlarm('openStop', true); this.clearAlarm('purgeInc', true); break;
+      case 'PURGE':
+        Object.assign(this.sd, { o2Start: this.o2, timerT0: null, dropChecked: false, below: 0, elapsed: 0, c1: null, kin: null });
+        this.lidArmed = false; this.command(p.purgeFlow); break;
+      case 'HANDOFF': {
+        const r = this.rbv;
+        if (r.ramp > 0 && r.ramp < p.rampMinHandoff) {
+          this.plant.putRamp(p.rampMinHandoff);
+          this.override(`ramp rate ${fmtN(r.ramp, 1)} → ${p.rampMinHandoff} SLPM/s (handoff minimum)`);
+        }
+        this.sd.phase = 'settle'; this.command(this.expectedFlow()); break;
+      }
+      case 'OPEN_LOOP':
+        this.command(this.expectedFlow()); this.setAlarm('openLoop', 2, 'O2 unavailable: running blind at fixed flow'); break;
+      case 'FLOW_ZERO': case 'OPEN_STOP':
+        this.command(0); break;
+    }
+  }
+  // ---------------- 1 Hz sequencer tick
+  tick(sec) {
+    this.now = sec;
+    if (this.down) return;
+    this.heartbeat++;
+    this.rbv = this.plant.rbv;
+    this.readInputs();
+    this.expireAlarms();
+    if (this.state !== 'IDLE') this.holdMonitor();
+    if (!this.lidDetector()) {
+      switch (this.state) {
+        case 'PRECHECK': this.doPrecheck(); break;
+        case 'PURGE': this.doPurge(); break;
+        case 'HANDOFF': this.doHandoff(); break;
+        case 'REGULATE':
+          if (!this.o2ok) this.enter('OPEN_LOOP', this.frozen ? 'O2 reading frozen' : 'O2 reading invalid');
+          break;
+        case 'OPEN_LOOP': this.command(this.expectedFlow()); break;
+      }
+    }
+    this.alarmChecks();
+  }
+  readInputs() {
+    const p = this.p, an = this.plant.an, v = an.value;
+    this.o2 = v;
+    if (an.sevr < 3 && v === this.lastO2) this.sameCount++; else this.sameCount = 0;   // "frozen" only applies to a valid-looking value
+    this.lastO2 = v;
+    this.frozen = this.sameCount >= p.frozenTime;
+    this.o2ok = an.sevr < 3 && v >= p.o2Min && v <= p.o2Max && !this.frozen;
+    this.o2hist.push(v); if (this.o2hist.length > 90) this.o2hist.shift();
+    const n = this.o2hist.length;
+    const rate = n > 10 ? (v - this.o2hist[n - 11]) / 10 : 0;            // 10 s difference, %/s
+    this.rateHist.push(this.o2ok ? rate : 0);
+    while (this.rateHist.length > p.lidSlopeWindow) this.rateHist.shift();
+    this.maxRate = Math.max(0, ...this.rateHist);
+    this.aboveCount = (this.o2ok && v > p.lidLevel) ? this.aboveCount + 1 : 0;
+    if (this.o2ok) { this.avgBuf.push(v); while (this.avgBuf.length > p.avgN) this.avgBuf.shift(); }
+    if (!this.o2ok) this.setAlarm('o2bad', 2, this.frozen ? 'O2 reading frozen' : 'O2 reading invalid');
+    else this.clearAlarm('o2bad');
+  }
+  lidDetector() {                              // §4.6
+    const p = this.p, s = this.state;
+    if (s === 'PURGE' && this.o2ok && this.o2 < p.lidArmLevel) this.lidArmed = true;
+    const armed = s === 'HANDOFF' || s === 'REGULATE' || (s === 'PURGE' && this.lidArmed);
+    if (armed && this.o2ok && this.aboveCount >= p.lidFilter && this.maxRate >= p.lidSlope) {
+      this.stopOpen(`enclosure opened, flow stopped (O2 ${fmtN(this.o2, 1)} %, rise ${fmtN(this.maxRate, 2)} %/s)`);
+      return true;
+    }
+    return false;
+  }
+  stopOpen(msg) { this.enter('OPEN_STOP', msg); this.setAlarm('openStop', 2, msg); }
+  holdMonitor() {                              // §4.6.2
+    const p = this.p, r = this.rbv;
+    if (!r.running) {
+      this.holdSec++;
+      if (this.holdAttempts >= p.holdRetries) this.setAlarm('holdStuck', 2, 'MFC on hold, cannot resume');
+      if (this.holdSec >= p.holdDetect && this.now >= this.nextHoldAttempt) {
+        this.plant.putRun();
+        this.holdAttempts++; this.holdRecovering = true;
+        this.st.log(1, `MFC on hold: wrote Run (attempt ${this.holdAttempts})`);
+        this.nextHoldAttempt = this.now + (this.holdAttempts < p.holdRetries ? p.holdRetryInterval : p.holdSlowRetry);
+      }
+    } else {
+      if (this.holdRecovering) {
+        this.holdRecovering = false;
+        if (this.lastCmd != null) this.plant.putSetpoint(this.lastCmd);   // re-send: writes during hold never reached the device
+        this.clearAlarm('holdStuck');
+        this.override(`MFC was on hold, resumed; setpoint ${fmtN(this.lastCmd)} re-sent`);
+      }
+      this.holdSec = 0; this.holdAttempts = 0; this.nextHoldAttempt = 0;
+    }
+  }
+  doPrecheck() {                               // §4.1: correct and warn, never refuse
+    const p = this.p, r = this.rbv;
+    if (!r.running) { this.plant.putRun(); this.holdRecovering = true; this.st.log(1, 'PRECHECK: MFC on hold, wrote Run'); }
+    if (r.ramp > p.rampMaxPurge || r.ramp === 0) {
+      this.plant.putRamp(p.rampMaxPurge);
+      this.override(`ramp rate ${r.ramp === 0 ? '0 (= no ramp, instant)' : fmtN(r.ramp, 1)} → ${p.rampMaxPurge} SLPM/s (purge maximum)`);
+    }
+    if (r.gas !== 'He') this.setAlarm('gas', 1, `MFC gas table is ${r.gas}, not He (flow reading wrong)`);
+    else this.clearAlarm('gas');
+    this.blind = !this.o2ok;
+    this.enter('PURGE', this.blind ? 'blind purge: O2 unavailable, timer only' : 'purge started');
+  }
+  doPurge() {                                  // §4.2 / §4.3
+    const p = this.p, sd = this.sd, r = this.rbv;
+    if (sd.timerT0 == null && (r.flow >= 0.95 * p.purgeFlow || this.now - sd.t0 >= 30)) sd.timerT0 = this.now;
+    if (!this.o2ok && !this.blind) { this.blind = true; this.st.log(2, 'O2 lost during purge: continuing on the timer (blind)'); }
+    const el = sd.timerT0 == null ? 0 : this.now - sd.timerT0;
+    sd.elapsed = el;
+    if (this.blind) { if (el >= p.purgeTimeout) this.enter('OPEN_LOOP', 'blind purge complete'); return; }
+    // Lid inference from purge kinetics (§4.2): with the lid on, O2 decays as exp(−F·t/V).
+    // With the lid open the helium rises away and the decay is at least 2× slower.
+    if (sd.timerT0 != null && sd.c1 == null && el >= p.kinT1) sd.c1 = this.o2;
+    if (!sd.dropChecked && el >= p.dropCheckTime) {
+      sd.dropChecked = true;
+      if (sd.o2Start >= p.dropSkipLevel) {
+        const kExp = p.purgeFlow / p.V / 60;                                            // 1/s, lid on
+        const kObs = (sd.c1 > 0 && this.o2 > 0) ? Math.log(sd.c1 / this.o2) / (p.dropCheckTime - p.kinT1) : 0;
+        const ratio = kObs / kExp; sd.kin = ratio;
+        if (ratio < p.openSlopeFrac) {
+          this.stopOpen(`purge decay only ${fmtN(100 * ratio, 0)} % of the lid-on rate: enclosure open?`); return;
+        }
+        this.st.log(0, `lid check passed: purge decay ${fmtN(100 * ratio, 0)} % of the lid-on rate (open below ${fmtN(100 * p.openSlopeFrac, 0)} %)`);
+      } else { sd.kin = 'skipped'; this.st.log(0, `lid check skipped: purge started at ${fmtN(sd.o2Start)} % (< ${p.dropSkipLevel} %)`); }
+    }
+    if (this.o2 < p.target - p.delta) sd.below++; else sd.below = 0;
+    if (sd.below >= p.handoffHold) { this.enter('HANDOFF', `O2 < target − Δ for ${p.handoffHold} s`); return; }
+    if (el >= p.purgeTimeout) {
+      this.latch('purgeInc', 1, 'purge incomplete: timeout reached before target − Δ');
+      this.enter('HANDOFF', 'purge timeout');
+    }
+  }
+  doHandoff() {                                // §4.4
+    const p = this.p, sd = this.sd, r = this.rbv;
+    if (!this.o2ok) { this.enter('OPEN_LOOP', 'O2 unavailable during handoff'); return; }
+    const exp = this.expectedFlow();
+    this.command(exp);
+    if (sd.phase === 'settle') {
+      if (Math.abs(r.flow - exp) <= p.handoffFlowTol || this.now - sd.t0 > 30) { sd.phase = 'delay'; sd.t1 = this.now; }
+    } else if (this.now - sd.t1 >= p.fbDelay) {
+      this.enter('REGULATE', 'feedback on');
+      this.configEpid(); this.epid.FBON = true;
+    }
+  }
+  alarmChecks() {
+    const p = this.p, r = this.rbv, s = this.state;
+    // flow mismatch (§5.1), compared against the last value this controller wrote
+    if (s !== 'IDLE' && this.lastCmd != null && r.running) {
+      const allowed = (r.ramp > 0 ? Math.abs(this.lastCmd - this.flowAtCmd) / r.ramp : 0) + p.mismatchMargin;
+      const tol = Math.max(p.mismatchAbs, p.mismatchFrac * this.lastCmd);
+      const off = Math.abs(this.lastCmd - r.flow) > tol;
+      if (off && this.now - this.lastCmdTime >= allowed) this.setAlarm('mismatch', 2, 'flow mismatch: cylinder empty or MFC fault?');
+      else if (!off) this.clearAlarm('mismatch');
+    } else this.clearAlarm('mismatch', true);
+    if (s === 'REGULATE') {
+      const settled = this.now - this.settleT0 >= p.alarmSettle;
+      const ratio = r.flow / this.expectedFlow();
+      this.debounce('flowHigh', !settled ? 0 : ratio >= p.flowMajorX ? 2 : ratio >= p.flowMinorX ? 1 : 0,
+        `flow ≥ ${p.flowMinorX}× expected: check enclosure`, `flow ≥ ${p.flowMajorX}× expected: check enclosure seal`);
+      if (this.epid.OVAL >= this.epid.DRVH - 1e-6) this.pinnedSec++; else this.pinnedSec = 0;
+      if (settled && this.pinnedSec >= p.pinnedTime) this.setAlarm('pinned', 2, 'PID pinned at max flow: check enclosure seal');
+      else this.clearAlarm('pinned');
+      if (this.o2ok) this.debounce('o2High', !settled ? 0 : this.o2 > p.target + p.o2AbnormalOffset ? 2 : this.o2 > p.target + p.tol ? 1 : 0,
+        'O2 above target range', 'O2 abnormally high');
+    }
+  }
+  // ---------------- epid record (synApps std, devEpidSoft algorithm)
+  processEpid() {
+    const e = this.epid;
+    if (this.avgBuf.length === 0) return;
+    this.configEpid();
+    const cval = this.avgBuf.reduce((a, b) => a + b, 0) / this.avgBuf.length;   // compress record, N-to-1 mean
+    e.CVAL = cval;
+    const dt = e.lastT == null ? this.p.pidScan : this.now - e.lastT; e.lastT = this.now;
+    const err = e.VAL - cval;
+    if (e.FBON && !e.fbonPrev) { e.I = clamp(this.plant.a.spVal, e.DRVL, e.DRVH); e.OVAL = e.I; }   // integral starts from OUTL
+    e.fbonPrev = e.FBON;
+    if (!e.FBON) { e.ePrev = err; return; }
+    const p = e.KP * err, di = e.KP * e.KI * err * dt;
+    let i = e.I;
+    if (e.KI !== 0) {
+      if ((e.OVAL > e.DRVL && e.OVAL < e.DRVH) || (e.OVAL >= e.DRVH && di < 0) || (e.OVAL <= e.DRVL && di > 0)) i += di;
+      i = clamp(i, e.DRVL, e.DRVH);
+    } else i = 0;
+    const d = e.KD ? e.KP * e.KD * (err - e.ePrev) / dt : 0;
+    const o = clamp(p + i + d, e.DRVL, e.DRVH);
+    e.I = i; e.P = p; e.D = d; e.ePrev = err;
+    if (e.ODEL === 0 || Math.abs(o - e.OVAL) > e.ODEL) e.OVAL = o;
+    this.command(e.OVAL);                       // OUTL written every cycle while FBON (assumed; see Admin note)
+  }
+  // ---------------- operator and IOC actions
+  opPurge() { if (this.down || this.state === 'PRECHECK' || this.state === 'PURGE') return; this.enter('PRECHECK', 'operator pressed Purge'); }
+  opFlowZero() { if (this.down) return; this.enter('FLOW_ZERO', 'operator pressed Flow Zero'); }
+  opResume() { if (this.down || this.state !== 'OPEN_LOOP' || !this.o2ok) return; this.enter('HANDOFF', 'operator pressed Resume PID'); }
+  opIdle() { if (this.down) return; this.enter('IDLE', 'admin released control'); }
+  crash() {
+    if (this.down) return;
+    this.down = true; this.downSince = this.now; this.state = 'IOC_DOWN';
+    this.st.log(2, 'IOC crashed: controller stopped, Alicat holds its last setpoint');
+  }
+  restart() {                                   // §4.7, settings come back from autosave
+    const now = this.st.t;
+    this.reinit(); this.now = now;
+    const an = this.plant.an, r = this.plant.rbv, p = this.p;
+    const valid = an.sevr < 3 && an.value >= p.o2Min && an.value <= p.o2Max;
+    this.st.log(0, 'IOC started via start_ioc (autosaved settings restored)');
+    if (valid && an.value < p.lidLevel && r.sp > 0) {
+      this.lastCmd = r.sp; this.lastCmdTime = now; this.flowAtCmd = r.flow;
+      this.enter('REGULATE', 'restart: O2 valid and setpoint > 0, resume regulation (§4.7)');
+      this.configEpid(); this.epid.FBON = true;
+    } else if (r.sp <= 0) this.enter('IDLE', 'restart: setpoint is 0 (§4.7)');
+    else if (!valid) this.enter('OPEN_LOOP', 'restart: O2 invalid (§4.7)');
+    else this.enter('IDLE', 'restart: O2 above lid threshold (§4.7)');
+  }
+}
+
+// =====================================================================================
+//  Station = plant + controller + history + scenario runner
+// =====================================================================================
+const LOG = [];
+let logVersion = 0;
+class Station {
+  constructor(name, prefix, mfc, o2pv, cylpv) {
+    Object.assign(this, { name, prefix, mfc, o2pv, cylpv });
+    this.pp = defaultPlantParams();
+    this.steps = 0;
+    this.plant = new Plant(this.pp);
+    this.ctl = new Controller(this);
+    this.hist = this.newHist();
+    this.scenario = null;
+  }
+  get t() { return this.steps * DT; }
+  newHist() { return { t: [], o2: [], bulk: [], flow: [], cmd: [], sp: [], cyl: [], state: [], drvh: [] }; }
+  log(sev, msg, kind) {
+    LOG.push({ t: this.t, st: this.name, sev, msg, kind });
+    if (LOG.length > 6000) LOG.splice(0, 1000);
+    logVersion++;
+  }
+  world(msg) { this.log(0, `world: ${msg}`, 'world'); }
+  step() {
+    this.steps++;
+    const t = this.t;
+    this.plant.t = t;
+    this.plant.step(DT);
+    if (this.steps % STEPS_PER_S === 0) {
+      const sec = Math.round(t);
+      this.plant.sampleAnalyzer();
+      this.plant.pollAlicat();
+      this.runScenario(sec);
+      this.ctl.tick(sec);
+      if (!this.ctl.down && sec % Math.max(1, Math.round(this.ctl.p.pidScan)) === 0) this.ctl.processEpid();
+      if (sec % HIST_EVERY === 0) this.record();
+    }
+  }
+  record() {
+    const h = this.hist, pl = this.plant, c = this.ctl;
+    h.t.push(this.t);
+    h.o2.push(pl.an.sevr >= 3 ? NaN : pl.an.value);
+    h.bulk.push(pl.C);
+    h.flow.push(pl.rbv.flow);
+    h.cmd.push(c.down || c.lastCmd == null ? NaN : c.lastCmd);
+    h.sp.push(pl.rbv.sp);
+    h.cyl.push(pl.cylP);
+    h.state.push(STATE_KEYS.indexOf(c.state));
+    h.drvh.push(c.state === 'REGULATE' ? c.epid.DRVH : NaN);
+    if (h.t.length > HIST_CAP) for (const k in h) h[k].splice(0, 10000);
+  }
+  resetAll() {
+    for (let i = LOG.length - 1; i >= 0; i--) if (LOG[i].st === this.name) LOG.splice(i, 1);
+    logVersion++;
+    this.steps = 0; this.plant.reset(); this.ctl.reinit(); this.ctl.enter('IDLE', 'station reset');
+    this.hist = this.newHist(); this.scenario = null;
+  }
+  startScenario(sc) {
+    this.resetAll();
+    this.ctl.p.target = 0.99; this.ctl.p.mode = 'A';   // scenarios start from the default target and mode; other settings are kept
+    this.log(0, `scenario: ${sc.name}`);
+    if (sc.setup) sc.setup(this);
+    this.scenario = { sc, i: 0, t0: Math.round(this.t) };
+  }
+  runScenario(sec) {
+    const r = this.scenario; if (!r) return;
+    const ev = r.sc.events;
+    while (r.i < ev.length && sec - r.t0 >= ev[r.i].t) {
+      const e = ev[r.i++]; this.log(0, `scenario step: ${e.label}`, 'world'); e.do(this);
+    }
+  }
+  presetRegulating() {                          // start already regulated (via the §4.7 restart path)
+    const f = this.ctl.expectedFlow(), pl = this.plant;
+    pl.setO2Everywhere(pl.steadyAt(f));
+    Object.assign(pl.a, { spVal: f, spDev: f, spRamped: f, flow: f, running: true });
+    pl.dEff = this.pp.delayMax;
+    pl.pollAlicat();
+    this.ctl.restart();
+  }
+}
+
+const stations = [
+  new Station('15IDC', '15IDC:SampleGas:', '15IDC:Alicat1:', '15IDC:D1Dmm_calc', '(macro CYL, PV not created yet)'),
+  new Station('15IDE', '15IDE:SampleGas:', '15IDE:Alicat?: (TBD)', '15IDE:O2 PV (TBD)', '(macro CYL, PV not created yet)'),
+];
+let cur = 0;
+const S = () => stations[cur];
+
+// =====================================================================================
+//  Scenarios (spec §8 list + data-derived cases)
+// =====================================================================================
+const act = (t, label, fn) => ({ t, label, do: fn });
+const SCENARIOS = [
+  { name: '1. Normal purge from air, normal lid (mode A)',
+    desc: 'Lid closed, box full of air. Purge at t = 5 s.\nWatch: lid check passes (decay ≈ 100 % of the lid-on rate). Handoff when O2 < 0.84 % for 15 s, OR the 6.5 min timeout fires first (the timing conflict from spec §4.2). Then a 2 min feedback delay and regulation toward 0.99 %. Mode A settles slowly (τ ≈ 169 min); try 1000×.',
+    events: [act(5, 'operator presses Purge', s => s.ctl.opPurge())] },
+  { name: '2. Purge with the lid left open',
+    desc: 'Lid open; Purge at t = 5 s.\nExpect: OPEN_STOP at the 60 s lid check (zero flow). The O2 decay rate from 20 s to 60 s after full flow is compared with the lid-on rate F/V; below half means open.\nCaveat: the open-box response to 20 SLPM has never been measured. The "openMix" plant parameter sets it; lower it (e.g. 0.02) to see where an open box would start passing the check.',
+    setup: s => s.plant.liftLid(),
+    events: [act(5, 'operator presses Purge (lid is open)', s => s.ctl.opPurge())] },
+  { name: '3. Lid lifted during regulation (Flow Zero forgotten)',
+    desc: 'Starts regulated at ~1 %. At t = 600 s the lid is lifted without Flow Zero.\nExpect: OPEN_STOP about 10 s after the lift (O2 > 10 % for 5 s AND rise ≥ 0.2 %/s), flow to 0.',
+    setup: s => s.presetRegulating(),
+    events: [act(600, 'lid lifted', s => s.plant.liftLid())] },
+  { name: '4. Flow Zero, lid kept on 22 min, then Purge',
+    desc: 'Regulated, then Flow Zero at 60 s with the lid on for 22 min.\nExpect: O2 creeps up ~0.5 % and nothing trips (the detector is not armed in FLOW_ZERO, and the rise is ~1000× too slow anyway). Purge at 22 min: the drop check is skipped because O2 < 18 %.',
+    setup: s => s.presetRegulating(),
+    events: [act(60, 'operator presses Flow Zero', s => s.ctl.opFlowZero()),
+             act(60 + 1320, 'operator presses Purge', s => s.ctl.opPurge())] },
+  { name: '5. Flow Zero, lift 76 s later, open 2 min, re-purge (24 Sep 11:52)',
+    desc: 'Replays the measured 24 Sep sequence: Flow Zero, lift 76 s later, lid off 2 min, closed, Purge.\nExpect: no alarms (Flow Zero was used). Purge from air: the drop check runs and passes.',
+    setup: s => s.presetRegulating(),
+    events: [act(60, 'operator presses Flow Zero', s => s.ctl.opFlowZero()),
+             act(136, 'lid lifted', s => s.plant.liftLid()),
+             act(256, 'lid closed', s => s.plant.closeLid()),
+             act(270, 'operator presses Purge', s => s.ctl.opPurge())] },
+  { name: '6. Collimator lid fitted but mode A selected',
+    desc: 'Collimator lid on the box, controller set to mode A (normal lid).\nExpect: the PID drives flow up to mode A\'s max (1.0 SLPM); O2 stays above target; "flow ≥ 2× expected" MAJOR, then "PID pinned" after 10 min. Not OPEN_STOP.',
+    setup: s => { s.plant.lidType = 'B'; s.ctl.p.mode = 'A'; s.presetRegulating(); s.plant.lidType = 'B'; },
+    events: [act(1, 'collimator lid already fitted, mode A', s => { s.plant.lidType = 'B'; })] },
+  { name: '7. Cylinder runs dry during regulation (7 h creep)',
+    desc: 'Regulated; at 60 s the cylinder is empty, so flow stops while the controller still commands it.\nExpect: flow-mismatch MAJOR. O2 creeps past 10 % over hours but does NOT trip OPEN_STOP (rise ≤ 0.0005 %/s). Run at 3000×.',
+    setup: s => s.presetRegulating(),
+    events: [act(60, 'cylinder empty', s => { s.plant.cylP = 0; })] },
+  { name: '8. MFC goes on hold during regulation (valve 100 %)',
+    desc: 'Regulated; at 300 s the Alicat goes into HLD with the valve held at 100 % (0.7 SLPM, as in the 2026-06-18 trace).\nExpect: after 3 s the controller writes Run, then re-sends the setpoint. MINOR "MFC was on hold, resumed".',
+    setup: s => s.presetRegulating(),
+    events: [act(300, 'Alicat enters hold, valve 100 %', s => s.plant.hold('open'))] },
+  { name: '9. MFC stuck on hold',
+    desc: 'Regulated; at 300 s the Alicat goes on hold and ignores Run.\nExpect: 3 Run attempts 10 s apart, then MAJOR "MFC on hold, cannot resume", with retries every 60 s. Clear the hold with the world button to see recovery.',
+    setup: s => s.presetRegulating(),
+    events: [act(300, 'Alicat stuck on hold', s => s.plant.hold('stuck'))] },
+  { name: '10. O2 analyzer freezes, recovers, operator resumes',
+    desc: 'Regulated; the analyzer value freezes at 300 s and recovers at 1500 s. The operator presses Resume PID at 1560 s.\nExpect: 30 s after the freeze, OPEN_LOOP (fixed expected flow, MAJOR); after Resume PID, HANDOFF, then REGULATE.',
+    setup: s => s.presetRegulating(),
+    events: [act(300, 'analyzer value freezes', s => { s.plant.an.mode = 'frozen'; }),
+             act(1500, 'analyzer back to normal', s => { s.plant.an.mode = 'normal'; }),
+             act(1560, 'operator presses Resume PID', s => s.ctl.opResume())] },
+  { name: '11. Analyzer INVALID at purge start (blind purge)',
+    desc: 'The analyzer is INVALID when Purge is pressed.\nExpect: a blind purge (full timeout, no drop check), then OPEN_LOOP. The analyzer returns at 600 s and the operator resumes PID at 660 s.',
+    setup: s => { s.plant.an.mode = 'invalid'; s.plant.an.sevr = 3; },
+    events: [act(5, 'operator presses Purge', s => s.ctl.opPurge()),
+             act(600, 'analyzer back to normal', s => { s.plant.an.mode = 'normal'; }),
+             act(660, 'operator presses Resume PID', s => s.ctl.opResume())] },
+  { name: '12. Bad ramp-rate settings',
+    desc: 'The Alicat ramp is 0 (= instant) when Purge is pressed; the controller clamps it to 5 SLPM/s. At 120 s someone sets 0.5 SLPM/s; at handoff the controller raises it to 2 SLPM/s.\nExpect: two MINOR overrides, OverrideCount = 2.',
+    setup: s => { s.plant.a.ramp = 0; s.plant.pollAlicat(); },
+    events: [act(5, 'operator presses Purge', s => s.ctl.opPurge()),
+             act(120, 'someone sets ramp 0.5 SLPM/s', s => s.plant.putRamp(0.5))] },
+  { name: '13. Cylinder nearly empty at purge',
+    desc: 'The cylinder is at 140 psi when Purge is pressed; delivery falls as pressure drops.\nExpect: flow cannot reach 20 SLPM, "flow mismatch" MAJOR; the purge timer starts after 30 s anyway.',
+    setup: s => { s.plant.cylP = 140; },
+    events: [act(5, 'operator presses Purge', s => s.ctl.opPurge())] },
+  { name: '14. IOC crash and restart during regulation',
+    desc: 'Regulated; the IOC crashes at 300 s (procServ --noautorestart) and is restarted at 900 s.\nExpect: while down, the Alicat holds its flow and the panel shows a heartbeat alarm. On restart, straight back to REGULATE without a bump (§4.7).',
+    setup: s => s.presetRegulating(),
+    events: [act(300, 'IOC crashes', s => s.ctl.crash()), act(900, 'start_ioc 15LSS_sample_gas', s => s.ctl.restart())] },
+  { name: '15. Cracked lid during regulation',
+    desc: 'Regulated; at 300 s the lid is cracked (slow extra leak).\nExpect: O2 rises slowly; the PID raises flow to its max; flow-high then "PID pinned" alarms. No OPEN_STOP (rise too slow). Helium use is bounded by DRVH.',
+    setup: s => s.presetRegulating(),
+    events: [act(300, 'lid cracked', s => s.plant.crackLid())] },
+  { name: '16. Target change 0.99 → 0.50 %',
+    desc: 'Regulated; at 300 s the operator changes the target to 0.50 %.\nExpect: the PID raises flow toward ~0.51 SLPM (mode A); slow approach given τ ≈ 169 min.',
+    setup: s => s.presetRegulating(),
+    events: [act(300, 'operator sets target 0.50 %', s => s.ctl.setTarget(0.5, 'operator'))] },
+  { name: '17. Collimator lid, mode B, normal purge',
+    desc: 'Collimator lid and mode B selected. Purge from air.\nExpect: handoff at ~0.84 SLPM expected flow, regulation near 0.99 % with shorter time constants (τ ≈ 53 min).',
+    setup: s => { s.plant.lidType = 'B'; s.ctl.p.mode = 'B'; },
+    events: [act(5, 'operator presses Purge', s => s.ctl.opPurge())] },
+];
+
+// =====================================================================================
+//  Charts
+// =====================================================================================
+function idxAtOrAfter(arr, t) { let lo = 0, hi = arr.length; while (lo < hi) { const m = (lo + hi) >> 1; if (arr[m] < t) lo = m + 1; else hi = m; } return lo; }
+function niceStep(range, n) {
+  const raw = range / n, mag = Math.pow(10, Math.floor(Math.log10(raw)));
+  for (const m of [1, 2, 2.5, 5, 10]) if (raw <= m * mag) return m * mag;
+  return 10 * mag;
+}
+function drawChart(cv, cfg) {
+  const dpr = window.devicePixelRatio || 1, W = cv.clientWidth, H = cv.clientHeight;
+  if (W < 10 || H < 10) return;
+  if (cv.width !== Math.round(W * dpr) || cv.height !== Math.round(H * dpr)) { cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr); }
+  const g = cv.getContext('2d'); g.setTransform(dpr, 0, 0, dpr, 0, 0); g.clearRect(0, 0, W, H);
+  const L = 56, R = 10, T = cfg.title ? 16 : 3, B = cfg.noX ? 3 : 16, pw = W - L - R, ph = H - T - B;
+  g.fillStyle = '#fff'; g.fillRect(L, T, pw, ph);
+  const h = cfg.hist, t0 = cfg.t0, t1 = cfg.t1;
+  const i0 = Math.max(0, idxAtOrAfter(h.t, t0) - 1), i1 = h.t.length;
+  const stride = Math.max(1, Math.floor((i1 - i0) / (pw * 1.5)));
+  const X = t => L + (t - t0) / (t1 - t0) * pw;
+  if (cfg.stateStrip) {
+    let i = i0;
+    while (i < i1) {
+      const s = h.state[i]; let j = i + 1; while (j < i1 && h.state[j] === s) j++;
+      const xa = Math.max(L, X(h.t[i])), xb = Math.min(L + pw, X(j < i1 ? h.t[j] : t1));
+      g.fillStyle = STATES[STATE_KEYS[s]] ? STATES[STATE_KEYS[s]].color : '#ccc';
+      if (xb > xa) g.fillRect(xa, T, xb - xa, ph);
+      if (xb - xa > 60) { g.fillStyle = '#fff'; g.font = '10px Consolas'; g.fillText(STATE_KEYS[s], xa + 3, T + ph / 2 + 3); }
+      i = j;
+    }
+  } else {
+    let ymin = Infinity, ymax = -Infinity;
+    for (const s of cfg.series) {
+      if (s.skipRange) continue;
+      for (let i = i0; i < i1; i += stride) { const v = h[s.key][i]; if (isFinite(v)) { if (v < ymin) ymin = v; if (v > ymax) ymax = v; } }
+    }
+    for (const l of cfg.lines || []) if (l.inRange) { ymin = Math.min(ymin, l.y); ymax = Math.max(ymax, l.y); }
+    if (!isFinite(ymin)) { ymin = cfg.log ? 0.1 : 0; ymax = 1; }
+    if (cfg.log) {
+      ymin = Math.max(cfg.logFloor, ymin * 0.8); ymax = Math.max(ymax * 1.25, ymin * 3);
+    } else {
+      if (cfg.zero) ymin = Math.min(0, ymin);
+      const pad = (ymax - ymin) * 0.08 || Math.abs(ymax) * 0.1 || 1; ymin -= cfg.zero ? 0 : pad; ymax += pad;
+    }
+    const ly0 = Math.log10(ymin), ly1 = Math.log10(ymax);
+    const Y = cfg.log ? (v => T + ph - (Math.log10(Math.max(v, ymin * 0.5)) - ly0) / (ly1 - ly0) * ph)
+                      : (v => T + ph - (v - ymin) / (ymax - ymin) * ph);
+    // grid + y labels
+    g.font = '10px Segoe UI'; g.fillStyle = '#333'; g.strokeStyle = '#e6e6e6'; g.lineWidth = 1;
+    const yt = [];
+    if (cfg.log) { for (let d = Math.floor(ly0); d <= Math.ceil(ly1); d++) for (const m of [1, 2, 5]) { const v = m * Math.pow(10, d); if (v >= ymin && v <= ymax) yt.push(v); } }
+    else { const st = niceStep(ymax - ymin, 5); for (let v = Math.ceil(ymin / st) * st; v <= ymax; v += st) yt.push(v); }
+    for (const v of yt) {
+      const y = Y(v); g.beginPath(); g.moveTo(L, y); g.lineTo(L + pw, y); g.stroke();
+      g.fillText(v >= 100 ? v.toFixed(0) : v >= 1 ? +v.toFixed(2) + '' : +v.toPrecision(2) + '', 4, y + 3);
+    }
+    for (const b of cfg.bands || []) { g.fillStyle = b.color; const ya = Y(b.y1), yb = Y(b.y0); g.fillRect(L, ya, pw, yb - ya); }
+    g.save(); g.beginPath(); g.rect(L, T, pw, ph); g.clip();
+    for (const l of cfg.lines || []) {
+      if (!isFinite(l.y)) continue;
+      g.strokeStyle = l.color; g.setLineDash(l.dash || []); g.lineWidth = 1;
+      const y = Y(l.y); g.beginPath(); g.moveTo(L, y); g.lineTo(L + pw, y); g.stroke();
+      g.setLineDash([]); g.fillStyle = l.color; g.fillText(l.label, L + pw - g.measureText(l.label).width - 4, y - 2);
+    }
+    for (const s of cfg.series) {
+      if (s.hidden) continue;
+      g.strokeStyle = s.color; g.lineWidth = s.width || 1.4; g.setLineDash(s.dash || []);
+      g.beginPath(); let pen = false, lastY = null;
+      for (let i = i0; i < i1; i += stride) {
+        const v = h[s.key][i];
+        if (!isFinite(v)) { pen = false; continue; }
+        const x = X(h.t[i]), y = Y(v);
+        if (!pen) { g.moveTo(x, y); pen = true; }
+        else { if (s.step && lastY != null) g.lineTo(x, lastY); g.lineTo(x, y); }
+        lastY = y;
+      }
+      g.stroke(); g.setLineDash([]);
+    }
+    g.restore();
+    // legend
+    let lx = L + 6; g.font = '11px Segoe UI';
+    for (const s of cfg.series) {
+      if (s.hidden) continue;
+      g.fillStyle = s.color; g.fillRect(lx, T + 5, 12, 3); g.fillStyle = '#222';
+      g.fillText(s.label, lx + 15, T + 10); lx += 22 + g.measureText(s.label).width;
+    }
+  }
+  g.strokeStyle = '#888'; g.strokeRect(L + 0.5, T + 0.5, pw, ph);
+  if (cfg.title) { g.fillStyle = '#222'; g.font = '600 11px Segoe UI'; g.fillText(cfg.title, L, 11); }
+  if (!cfg.noX) {
+    const st = [10, 30, 60, 120, 300, 600, 1200, 1800, 3600, 7200, 14400, 21600, 43200].find(v => (t1 - t0) / v <= 8) || 86400;
+    g.fillStyle = '#333'; g.font = '10px Segoe UI';
+    for (let t = Math.ceil(t0 / st) * st; t <= t1; t += st) { const x = X(t); g.fillRect(x, T + ph, 1, 3); g.fillText(fmtT(t), x - 18, T + ph + 13); }
+  }
+}
+
+// =====================================================================================
+//  Admin / deep-admin screens (spec §7.0)
+// =====================================================================================
+const F = (k, l, u, min, max, step, int) => ({ k, l, u, min, max, step, int });
+const ADMIN_FIELDS = [
+  F('tol', 'O2 in-range tolerance (display only, not a deadband)', '%', 0.005, 0.5, 0.005),
+  F('delta', 'Purge handoff margin Δ below target', '%', 0, 1, 0.01),
+  F('purgeFlow', 'Purge flow', 'SLPM', 1, 20, 0.5),
+  F('purgeTimeout', 'Purge timeout', 's', 60, 1800, 10, true),
+  F('dropCheckTime', 'Lid check: decision time after full flow', 's', 20, 300, 5, true),
+  F('fbDelay', 'Feedback delay after handoff (sensor settling)', 's', 0, 600, 10, true),
+  F('flowMinorX', 'Flow-high MINOR threshold', '× exp', 1.05, 5, 0.05),
+  F('flowMajorX', 'Flow-high MAJOR threshold', '× exp', 1.1, 10, 0.05),
+  F('pinnedTime', 'PID pinned at max → MAJOR after', 's', 30, 7200, 30, true),
+  F('o2AbnormalOffset', 'O2 "abnormally high" above target by', '%', 0.02, 5, 0.01),
+  F('alarmSettle', 'Flow/O2 alarms suppressed after feedback-on or target change', 's', 0, 14400, 60, true),
+];
+const ADMIN_MODE_FIELDS = [
+  F('KP', 'epid KP (negative)', 'SLPM/%', -100, 0, 0.1),
+  F('KI', 'epid KI', '1/s', 0, 0.05, 0.0001),
+  F('drvh', 'Max PID flow (DRVH, capped by hard ceiling)', 'SLPM', 0.1, 20, 0.05),
+];
+const DEEP_FIELDS = [
+  F('V', 'Enclosure volume (sets the lid-on purge decay rate F/V)', 'L', 5, 200, 0.5),
+  F('kinT1', 'Lid check: decay-rate window starts after full flow', 's', 5, 120, 1, true),
+  F('openSlopeFrac', 'Lid check: open if decay < this fraction of F/V', '', 0.05, 0.95, 0.05),
+  F('dropSkipLevel', 'Lid check skipped if purge starts below', '%', 1, 21, 0.1),
+  F('handoffHold', 'Handoff: O2 below target−Δ for', 's', 1, 120, 1, true),
+  F('handoffFlowTol', 'Handoff: flow-settled tolerance', 'SLPM', 0.01, 1, 0.01),
+  F('lidLevel', 'Lid detector: O2 level', '%', 2, 19, 0.5),
+  F('lidFilter', 'Lid detector: above level for', 's', 1, 60, 1, true),
+  F('lidSlope', 'Lid detector: rise rate (10 s difference)', '%/s', 0.005, 2, 0.005),
+  F('lidSlopeWindow', 'Lid detector: rate look-back window', 's', 10, 300, 5, true),
+  F('lidArmLevel', 'Lid detector arms in PURGE below', '%', 1, 18, 0.5),
+  F('rampMaxPurge', 'Ramp clamp at purge start (max; 0 counts as instant)', 'SLPM/s', 0.5, 20, 0.5),
+  F('rampMinHandoff', 'Ramp clamp at handoff (min)', 'SLPM/s', 0.1, 10, 0.1),
+  F('hardCeiling', 'Hard PID flow ceiling (surface vibration)', 'SLPM', 0.1, 20, 0.1),
+  F('drvlFrac', 'DRVL as fraction of expected flow', '', 0, 1, 0.05),
+  F('drvlMin', 'DRVL absolute minimum', 'SLPM', 0, 1, 0.01),
+  F('mismatchAbs', 'Flow mismatch tolerance (absolute)', 'SLPM', 0.01, 2, 0.01),
+  F('mismatchFrac', 'Flow mismatch tolerance (fraction)', '', 0, 0.5, 0.01),
+  F('mismatchMargin', 'Flow mismatch time margin after ramp', 's', 1, 120, 1, true),
+  F('holdDetect', 'Hold monitor: on hold for', 's', 1, 60, 1, true),
+  F('holdRetries', 'Hold monitor: fast Run attempts', '', 1, 20, 1, true),
+  F('holdRetryInterval', 'Hold monitor: fast retry interval', 's', 2, 120, 1, true),
+  F('holdSlowRetry', 'Hold monitor: slow retry interval', 's', 10, 3600, 10, true),
+  F('frozenTime', 'O2 frozen after unchanged for', 's', 5, 600, 5, true),
+  F('o2Min', 'O2 plausible minimum', '%', -5, 1, 0.1),
+  F('o2Max', 'O2 plausible maximum', '%', 19, 100, 0.5),
+  F('avgN', 'O2 averaging (compress N)', 'samples', 1, 120, 1, true),
+  F('pidScan', 'epid scan period', 's', 1, 120, 1, true),
+  F('odel', 'epid ODEL (output deadband)', 'SLPM', 0, 0.5, 0.005),
+  F('alarmDelay', 'Alarm debounce (level must persist)', 's', 0, 300, 1, true),
+];
+const DEEP_MODE_FIELDS = [
+  F('baseFlow', 'Base flow for 0.99 % O2', 'SLPM', 0.01, 20, 0.01),
+  F('n', 'Expected-flow exponent n (flow ∝ (0.99/target)^n)', '', 0.1, 3, 0.01),
+];
+const PLANT_FIELDS = [
+  F('V', 'Enclosure volume', 'L', 5, 200, 1), F('ingressA_a', 'Normal lid ingress a', '%·L/min', 0, 5, 0.01),
+  F('ingressA_b', 'Normal lid ingress b (F^b)', '', -2, 2, 0.01), F('ingressB_a', 'Collimator ingress a', '%·L/min', 0, 5, 0.01),
+  F('ingressB_b', 'Collimator ingress b (F^b)', '', -2, 2, 0.01), F('kOffA', 'Flow-off leak-in, normal lid', '/min', 0, 0.1, 0.0001),
+  F('kOffB', 'Flow-off leak-in, collimator', '/min', 0, 0.1, 0.0001), F('crackIngress', 'Cracked-lid extra ingress', '%·L/min', 0, 50, 0.5),
+  F('openTau', 'Lid-lift time constant', 's', 1, 60, 0.25), F('openMix', 'Open-lid air exchange multiplier', '', 0.01, 5, 0.01),
+  F('zoneTauHold', 'Sensor-zone lag at hold flow', 's', 1, 300, 1), F('delayA', 'Transport delay A (A + B/F)', 's', 0, 60, 0.5),
+  F('delayB', 'Transport delay B (A + B/F)', 's·SLPM', 0, 60, 0.1), F('delayMax', 'Transport delay maximum', 's', 5, 190, 1),
+  F('noise', 'Analyzer noise per sample', '%', 0, 0.05, 0.0005), F('holdOpenFlow', 'Flow with valve held at 100 %', 'SLPM', 0, 20, 0.1),
+  F('cylLitersPerPsi', 'Cylinder litres per psi', 'L/psi', 0.5, 50, 0.25), F('alicatTau', 'MFC flow response τ', 's', 0.05, 10, 0.05),
+];
+
+function clampField(f, raw) {
+  let v = parseFloat(raw);
+  if (!isFinite(v)) return null;
+  if (f.int) v = Math.round(v);
+  return clamp(v, f.min, f.max);
+}
+function fieldRow(f, obj, onChange) {
+  const id = 'f_' + Math.random().toString(36).slice(2);
+  return { html: `<div>${f.l}</div><input id="${id}" type="number" step="${f.step}" value="${obj[f.k]}"><div>${f.u}</div><div class="lim">${f.min} … ${f.max}</div>`,
+           bind: () => { const el = $(id); el.addEventListener('change', () => {
+             const v = clampField(f, el.value);
+             if (v == null) { el.value = obj[f.k]; el.classList.add('flash'); setTimeout(() => el.classList.remove('flash'), 600); return; }
+             if (v !== parseFloat(el.value)) { el.classList.add('flash'); setTimeout(() => el.classList.remove('flash'), 600); }
+             obj[f.k] = v; el.value = v; if (onChange) onChange(f, v);
+           }); } };
+}
+let modalLevel = null;
+function openModal(level) { modalLevel = level; $('modal').classList.remove('hidden'); renderModal(); }
+function closeModal() { modalLevel = null; $('modal').classList.add('hidden'); }
+function renderModal() {
+  const st = S(), c = st.ctl, p = c.p;
+  const binds = [];
+  const logChange = (f, v) => st.log(0, `settings: ${f.l} = ${v}`);
+  const grid = (fields, obj) => {
+    let h = '<div class="fgrid"><div class="h">Setting</div><div class="h">Value</div><div class="h">Unit</div><div class="h">Limits</div>';
+    for (const f of fields) { const r = fieldRow(f, obj, logChange); h += r.html; binds.push(r.bind); }
+    return h + '</div>';
+  };
+  const modeTable = (fields) => {
+    let h = '<table class="mt"><tr><th>Setting</th>';
+    for (const m of Object.keys(p.modes)) h += `<th>Mode ${m}: ${p.modes[m].name}</th>`;
+    h += '<th>Unit</th></tr>';
+    for (const f of fields) {
+      h += `<tr><td>${f.l}</td>`;
+      for (const m of Object.keys(p.modes)) {
+        const id = `mf_${m}_${f.k}`;
+        h += `<td><input id="${id}" type="number" step="${f.step}" value="${p.modes[m][f.k]}"></td>`;
+        binds.push(() => { const el = $(id); el.addEventListener('change', () => {
+          const v = clampField(f, el.value); if (v == null) { el.value = p.modes[m][f.k]; return; }
+          p.modes[m][f.k] = v; el.value = v; st.log(0, `settings: mode ${m} ${f.l} = ${v}`); }); });
+      }
+      h += `<td>${f.u}</td></tr>`;
+    }
+    return h + '</table>';
+  };
+  let body = '';
+  if (modalLevel === 'admin') {
+    $('modalTitle').textContent = `Admin: ${st.prefix}  (beamline staff)`;
+    body += grid(ADMIN_FIELDS, p);
+    body += '<h4>PID gains and limits per enclosure mode</h4>' + modeTable(ADMIN_MODE_FIELDS);
+    body += `<h4>Overrides (automatic corrections): count = <span id="ovCount">${c.overrideCount}</span> <button id="ovReset">reset count</button></h4>`;
+    body += `<div class="internals" id="ovList" style="max-height:120px;overflow:auto"></div>`;
+    body += '<h4>Live internals (read-only)</h4><div class="internals" id="internals"></div>';
+    body += `<div class="note">Assumption to verify on the real IOC: epid writes OUTL every scan while FBON = 1, so an unchanged output is re-sent every scan. The hold monitor re-sends explicitly either way.</div>`;
+    body += '<div style="margin-top:8px"><button id="toDeep">Deep admin settings…</button> <button id="relIdle">Release control (→ IDLE)</button></div>';
+  } else {
+    $('modalTitle').textContent = `Deep admin: ${st.prefix}  (instrument scientist)`;
+    body += '<div class="note">Every physical and threshold number the controller uses. All are autosaved records with limits (DRVL/DRVH), so a typo cannot set an absurd value.</div>';
+    body += '<h4>Enclosure modes</h4>' + modeTable(DEEP_MODE_FIELDS);
+    body += '<h4>Thresholds, timing and limits</h4>' + grid(DEEP_FIELDS, p);
+    body += `<h4>Linked PVs (set at IOC start by st.cmd macros; read-only)</h4><div class="internals">P   = ${st.prefix}\nMFC = ${st.mfc}\nO2  = ${st.o2pv}\nCYL = ${st.cylpv}</div>`;
+    body += '<div style="margin-top:8px"><button id="toAdmin">◀ Back to Admin</button></div>';
+  }
+  $('modalBody').innerHTML = body;
+  binds.forEach(b => b());
+  if ($('toDeep')) $('toDeep').onclick = () => { modalLevel = 'deep'; renderModal(); };
+  if ($('toAdmin')) $('toAdmin').onclick = () => { modalLevel = 'admin'; renderModal(); };
+  if ($('relIdle')) $('relIdle').onclick = () => st.ctl.opIdle();
+  if ($('ovReset')) $('ovReset').onclick = () => { st.ctl.overrideCount = 0; st.log(0, 'settings: override count reset'); };
+}
+function updateModalLive() {
+  if (modalLevel !== 'admin') return;
+  const st = S(), c = st.ctl, e = c.epid;
+  if ($('internals')) $('internals').textContent =
+    `state ${c.state}   heartbeat ${c.heartbeat}   down ${c.down}\n` +
+    `epid  FBON ${e.FBON ? 1 : 0}  VAL ${fmtN(e.VAL, 3)}  CVAL ${fmtN(e.CVAL, 4)}  P ${fmtN(e.P, 4)}  I ${fmtN(e.I, 4)}  OVAL ${fmtN(e.OVAL, 3)}  DRVL ${fmtN(e.DRVL, 3)}  DRVH ${fmtN(e.DRVH, 3)}\n` +
+    `expected flow ${fmtN(c.expectedFlow(), 3)} SLPM   last commanded ${fmtN(c.lastCmd, 3)} SLPM\n` +
+    `lid detector: above-level ${c.aboveCount} s, max rise (60 s) ${fmtN(c.maxRate, 4)} %/s, armed-in-purge ${c.lidArmed}\n` +
+    `hold monitor: on-hold ${c.holdSec} s, attempts ${c.holdAttempts}    O2 ok ${c.o2ok} frozen ${c.frozen}`;
+  if ($('ovCount')) $('ovCount').textContent = c.overrideCount;
+  if ($('ovList')) $('ovList').textContent = c.overrides.slice(-50).reverse().map(o => `${fmtT(o.t)}  ${o.msg}`).join('\n') || '(none)';
+}
+
+// =====================================================================================
+//  Main UI wiring
+// =====================================================================================
+function buildTabs() {
+  $('stationTabs').innerHTML = stations.map((s, i) => `<div class="tab ${i === cur ? 'active' : ''}" data-i="${i}"><span class="dot" id="tabdot${i}"></span>${s.name} <span id="tabst${i}" style="font-family:Consolas;font-size:11px"></span></div>`).join('');
+  document.querySelectorAll('.tab').forEach(el => el.onclick = () => { cur = +el.dataset.i; buildTabs(); onStationChange(); });
+}
+function onStationChange() {
+  const st = S();
+  $('pvPrefix').textContent = st.prefix;
+  $('selMode').innerHTML = Object.keys(st.ctl.p.modes).map(m => `<option value="${m}">${m}: ${st.ctl.p.modes[m].name}</option>`).join('');
+  $('wLidType').value = st.plant.lidType;
+  $('wRamp').value = st.plant.a.ramp;
+  $('wGas').value = st.plant.a.gas;
+  $('wCylPv').checked = st.plant.cylPresent;
+  document.querySelectorAll('input[name=an]').forEach(r => r.checked = (r.value === st.plant.an.mode));
+  buildPlantGrid();
+  lastLogRender = -1;
+  if (modalLevel) renderModal();
+}
+function buildPlantGrid() {
+  const st = S(); const binds = [];
+  let h = '';
+  for (const f of PLANT_FIELDS) {
+    const id = 'pf_' + f.k;
+    h += `<div>${f.l} <span class="lim">${f.u}</span></div><input id="${id}" type="number" step="${f.step}" value="${st.pp[f.k]}"><div></div>`;
+    binds.push(() => { const el = $(id); el.addEventListener('change', () => { const v = clampField(f, el.value); if (v == null) { el.value = st.pp[f.k]; return; } st.pp[f.k] = v; el.value = v; st.world(`plant ${f.l} = ${v}`); }); });
+  }
+  $('plantGrid').innerHTML = h; binds.forEach(b => b());
+}
+function wire() {
+  $('btnPurge').onclick = () => S().ctl.opPurge();
+  $('btnZero').onclick = () => S().ctl.opFlowZero();
+  $('btnResume').onclick = () => S().ctl.opResume();
+  $('btnAdmin').onclick = () => openModal('admin');
+  $('modalClose').onclick = closeModal;
+  $('modal').addEventListener('click', e => { if (e.target.id === 'modal') closeModal(); });
+  $('selMode').onchange = () => { const st = S(); st.ctl.p.mode = $('selMode').value; st.log(0, `operator: enclosure mode → ${st.ctl.p.modes[st.ctl.p.mode].name}`); };
+  $('inTarget').onchange = () => {
+    const st = S(); const v = parseFloat($('inTarget').value);
+    if (!isFinite(v) || v < 0.2 || v > 5) { $('inTarget').value = st.ctl.p.target; return; }
+    st.ctl.setTarget(v, 'operator');
+  };
+  $('btnPlay').onclick = () => { playing = !playing; $('btnPlay').textContent = playing ? '⏸ Pause' : '▶ Run'; };
+  $('btnStep').onclick = () => { for (let i = 0; i < 10 * STEPS_PER_S; i++) stations.forEach(s => s.step()); };
+  $('speed').onchange = () => { speed = +$('speed').value; };
+  // world
+  const w = (fn, msg) => () => { const st = S(); fn(st); st.world(msg); };
+  $('wClose').onclick = w(s => s.plant.closeLid(), 'lid closed');
+  $('wLift').onclick = w(s => s.plant.liftLid(), 'lid lifted');
+  $('wCrack').onclick = w(s => s.plant.crackLid(), 'lid cracked (slow leak)');
+  $('wReseat').onclick = () => { const st = S(); st.plant.reseat(); st.world(`lid re-seated, seal factor ${fmtN(st.plant.seal)}`); };
+  $('wLidType').onchange = () => { const st = S(); st.plant.lidType = $('wLidType').value; st.world(`lid fitted: ${st.plant.lidType === 'A' ? 'normal' : 'collimator'}`); };
+  $('wHold').onclick = w(s => s.plant.hold('current'), 'Alicat hold, valve at current opening');
+  $('wHoldOpen').onclick = w(s => s.plant.hold('open'), 'Alicat hold, valve 100 %');
+  $('wHoldStuck').onclick = w(s => s.plant.hold('stuck'), 'Alicat stuck on hold (ignores Run)');
+  $('wUnhold').onclick = w(s => s.plant.clearHold(), 'Alicat hold cleared at the device');
+  $('wRampSet').onclick = () => { const st = S(); const v = Math.max(0, parseFloat($('wRamp').value) || 0); st.plant.putRamp(v); st.world(`Alicat ramp set to ${v} SLPM/s`); };
+  $('wGas').onchange = () => { const st = S(); st.plant.a.gas = $('wGas').value; st.world(`Alicat gas table = ${st.plant.a.gas}`); };
+  $('wRefill').onclick = w(s => { s.plant.cylP = s.pp.cylP0; }, 'cylinder replaced (2000 psi)');
+  $('wLow').onclick = w(s => { s.plant.cylP = 120; }, 'cylinder nearly empty (120 psi)');
+  $('wEmpty').onclick = w(s => { s.plant.cylP = 0; }, 'cylinder empty');
+  $('wCylPv').onchange = () => { S().plant.cylPresent = $('wCylPv').checked; };
+  document.querySelectorAll('input[name=an]').forEach(r => r.onchange = () => { const st = S(); st.plant.an.mode = r.value; st.world(`analyzer ${r.value}`); });
+  $('wDip').onclick = () => { const st = S(); st.plant.dipUntil = st.t + 60; st.world('ambient O2 dip (−0.6 % for 60 s)'); };
+  $('wCrash').onclick = () => S().ctl.crash();
+  $('wRestart').onclick = () => { const st = S(); if (st.ctl.down) st.ctl.restart(); };
+  $('scSel').innerHTML = SCENARIOS.map((s, i) => `<option value="${i}">${s.name}</option>`).join('');
+  const showDesc = () => { $('scDesc').textContent = SCENARIOS[+$('scSel').value].desc; };
+  $('scSel').onchange = showDesc; showDesc();
+  $('scRun').onclick = () => { const st = S(); st.startScenario(SCENARIOS[+$('scSel').value]); onStationChange(); };
+  $('scReset').onclick = () => { S().resetAll(); onStationChange(); };
+  window.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
+}
+
+let lastLogRender = -1;
+function render() {
+  const st = S(), c = st.ctl, pl = st.plant, p = c.p;
+  $('clock').textContent = fmtT(st.t);
+  // tabs
+  stations.forEach((s, i) => {
+    const sev = s.ctl.down ? 2 : s.ctl.worstSev();
+    $('tabdot' + i).style.background = sev >= 2 ? 'var(--major)' : sev === 1 ? 'var(--minor)' : '#4caf50';
+    $('tabst' + i).textContent = s.ctl.state;
+  });
+  // banner
+  const b = $('banner');
+  const stale = c.down && st.t - c.downSince > 10;
+  if (c.down) {
+    b.className = 'banner major';
+    b.innerHTML = stale ? '<div>Controller IOC not responding (heartbeat stale). The Alicat is holding its last flow. Run start_ioc 15LSS_sample_gas.</div>'
+                        : '<div>Controller IOC not responding…</div>';
+  } else {
+    const al = [...c.alarms.values()].sort((a, b2) => b2.sev - a.sev);
+    const w = al.length ? al[0].sev : 0;
+    b.className = 'banner' + (w >= 2 ? ' major' : w === 1 ? ' minor' : '');
+    b.innerHTML = al.length ? al.map(a => `<div>${SEV_NAME[a.sev]}: ${a.msg}</div>`).join('') : 'No alarms';
+  }
+  // readouts
+  const o2box = $('roO2Box');
+  o2box.className = 'ro' + (pl.an.sevr >= 3 ? ' invalid' : c.alarms.has('o2High') ? (c.alarms.get('o2High').sev >= 2 ? ' major' : ' minor') : '');
+  $('roO2').textContent = pl.an.sevr >= 3 ? 'INVALID' : fmtN(pl.an.value, 3);
+  $('roO2x').textContent = `target ${fmtN(p.target)} ± ${fmtN(p.tol, 3)} %`;
+  $('roFlow').textContent = fmtN(pl.rbv.flow, 2);
+  $('roFlowx').textContent = pl.rbv.running ? `expected ${fmtN(c.expectedFlow(), 2)} SLPM` : 'MFC STATUS: HLD';
+  $('roFlowBox').className = 'ro' + (!pl.rbv.running ? ' major' : c.alarms.has('flowHigh') || c.alarms.has('mismatch') ? ' minor' : '');
+  $('roSP').textContent = fmtN(pl.rbv.sp, 2);
+  $('roSPx').textContent = c.down ? 'controller down' : `commanded ${fmtN(c.lastCmd, 3)}${c.epid.FBON ? '  (PID)' : ''}`;
+  if (pl.cylPresent) { $('roCyl').textContent = fmtN(pl.cylP, 0); $('roCylBox').className = 'ro' + (pl.cylP < 200 ? ' major' : pl.cylP < 500 ? ' minor' : ''); $('roCylx').textContent = `≈ ${fmtN(pl.cylP * st.pp.cylLitersPerPsi, 0)} L He left`; }
+  else { $('roCyl').textContent = 'n/a'; $('roCylBox').className = 'ro na'; $('roCylx').textContent = 'CYL PV not configured'; }
+  // state
+  const sk = c.state, sdef = STATES[sk];
+  $('stateBadge').textContent = sk; $('stateBadge').style.background = sdef.color;
+  $('stateDesc').textContent = sdef.desc;
+  const inR = !c.down && pl.an.sevr < 3 && Math.abs(pl.an.value - p.target) <= p.tol;
+  $('ledRange').style.background = inR ? '#3fd13f' : '#666';
+  let pr = '';
+  if (sk === 'PURGE') {
+    const sd = c.sd;
+    pr = `purge ${fmtT(sd.elapsed)} / ${fmtT(p.purgeTimeout)}${sd.timerT0 == null ? ' (waiting for full flow)' : ''}` +
+         (c.blind ? '  BLIND (timer only)' : `  start ${fmtN(sd.o2Start)} %  lid check: ${sd.kin == null ? 'pending' : sd.kin === 'skipped' ? 'skipped' : 'decay ' + fmtN(100 * sd.kin, 0) + ' % of lid-on'}  handoff at < ${fmtN(p.target - p.delta)} %`);
+  } else if (sk === 'HANDOFF') {
+    pr = c.sd.phase === 'settle' ? 'waiting for flow to settle at expected' : `feedback on in ${fmtT(p.fbDelay - (c.now - c.sd.t1))}`;
+  } else if (sk === 'REGULATE') {
+    pr = `PID: CVAL ${fmtN(c.epid.CVAL, 3)} %  P ${fmtN(c.epid.P, 3)}  I ${fmtN(c.epid.I, 3)}  out ${fmtN(c.epid.OVAL, 3)} [${fmtN(c.epid.DRVL, 2)}…${fmtN(c.epid.DRVH, 2)}]`;
+  }
+  $('progress').textContent = pr || ' ';
+  $('lastAction').textContent = c.down ? '—' : c.lastAction;
+  const busy = c.down || sk === 'PRECHECK' || sk === 'PURGE';
+  $('btnPurge').disabled = busy; $('btnZero').disabled = c.down;
+  $('btnResume').disabled = !(sk === 'OPEN_LOOP' && c.o2ok);
+  if (document.activeElement !== $('selMode')) $('selMode').value = p.mode;
+  if (document.activeElement !== $('inTarget')) $('inTarget').value = p.target;
+  // world status
+  const a = pl.a;
+  $('worldStatus').textContent =
+    `lid        ${pl.lid}${pl.crack ? ' (cracked)' : ''}, ${pl.lidType === 'A' ? 'normal' : 'collimator'} lid, seal ×${fmtN(pl.seal)}\n` +
+    `true O2    bulk ${fmtN(pl.C, 3)} %   sensor zone ${fmtN(pl.zone, 3)} %\n` +
+    `transport  delay ${fmtN(pl.dEff, 0)} s   ambient ${fmtN(pl.ambient(), 2)} %\n` +
+    `Alicat     ${a.running ? 'running' : (a.stuck ? 'HLD (stuck)' : 'HLD')}  dev.setpoint ${fmtN(a.spDev)}  record VAL ${fmtN(a.spVal)}\n` +
+    `           flow ${fmtN(a.flow, 3)}  ramp ${a.ramp} SLPM/s  gas ${a.gas}\n` +
+    `cylinder   ${fmtN(pl.cylP, 0)} psi, max delivery ${fmtN(pl.cylCapacity(), 1)} SLPM\n` +
+    `analyzer   ${pl.an.mode}${pl.an.sevr >= 3 ? ' (INVALID)' : ''}`;
+  // charts
+  const win = +$('win').value;
+  const t1 = Math.max(st.t, 60), t0 = win ? t1 - win : (st.hist.t[0] || 0);
+  const bulkHidden = !$('showBulk').checked;
+  drawChart($('cO2'), { hist: st.hist, t0, t1, log: $('logO2').checked, logFloor: 0.05, title: 'Oxygen (%)', noX: true,
+    series: [{ key: 'o2', color: '#111', label: 'analyzer reading' }, { key: 'bulk', color: '#9a9a9a', dash: [4, 3], label: 'true bulk (sim only)', hidden: bulkHidden, skipRange: bulkHidden }],
+    bands: [{ y0: p.target - p.tol, y1: p.target + p.tol, color: 'rgba(60,180,60,0.18)' }],
+    lines: [{ y: p.target, color: '#2e8b2e', label: 'target' }, { y: p.target - p.delta, color: '#2f6fbf', dash: [2, 3], label: 'target − Δ' },
+            { y: p.lidLevel, color: '#c00000', dash: [5, 4], label: 'lid 10 %' }, { y: p.dropSkipLevel, color: '#aa6600', dash: [2, 5], label: 'drop-check skip' }] });
+  drawChart($('cFlow'), { hist: st.hist, t0, t1, log: $('logFlow').checked, logFloor: 0.05, title: 'Helium flow (SLPM)', noX: true,
+    series: [{ key: 'flow', color: '#1f5fbf', label: 'Flow_RBV' }, { key: 'cmd', color: '#ff7f0e', label: 'commanded setpoint', step: true, width: 1.2 },
+             { key: 'drvh', color: '#d62728', label: 'PID max (DRVH)', dash: [3, 3], step: true, width: 1 }],
+    lines: [{ y: c.expectedFlow(), color: '#6a3d9a', dash: [2, 3], label: 'expected' }] });
+  drawChart($('cCyl'), { hist: st.hist, t0, t1, log: false, title: 'Cylinder pressure (psi)', noX: true, zero: true,
+    series: [{ key: 'cyl', color: '#555', label: 'cylinder' }] });
+  drawChart($('cState'), { hist: st.hist, t0, t1, stateStrip: true });
+  // log
+  if (logVersion !== lastLogRender) {
+    lastLogRender = logVersion;
+    const both = $('logBoth').checked;
+    const rows = [];
+    for (let i = LOG.length - 1; i >= 0 && rows.length < 300; i--) {
+      const e = LOG[i]; if (!both && e.st !== st.name) continue;
+      rows.push(`<div class="l${e.sev} ${e.kind || ''}">${fmtT(e.t)}  ${e.st}  ${e.sev ? SEV_NAME[e.sev].padEnd(5) : '     '}  ${e.msg.replace(/</g, '&lt;')}</div>`);
+    }
+    $('log').innerHTML = rows.join('');
+  }
+  updateModalLive();
+}
+$('logBoth') && ($('logBoth').onchange = () => { lastLogRender = -1; });
+
+// =====================================================================================
+//  Main loop
+// =====================================================================================
+let speed = 60, playing = true, lastReal = performance.now(), acc = 0, lastDraw = 0;
+function frame(now) {
+  const realDt = Math.min(0.1, (now - lastReal) / 1000); lastReal = now;
+  if (playing) {
+    acc += realDt * speed;
+    let n = Math.floor(acc / DT);
+    const cap = 6000;
+    if (n > cap) { n = cap; acc = 0; } else acc -= n * DT;
+    for (let i = 0; i < n; i++) for (const s of stations) s.step();
+  }
+  if (now - lastDraw > 80) { render(); lastDraw = now; }
+  requestAnimationFrame(frame);
+}
+
+// Test hook: run a station fast without rendering. SIM.run(0, 600) advances station 0 by 600 s.
+window.SIM = {
+  stations, SCENARIOS, LOG,
+  run(i, seconds) { const st = stations[i]; for (let k = 0; k < seconds * STEPS_PER_S; k++) st.step(); return st.ctl.state; },
+  scenario(i, idx, seconds) { const st = stations[i]; st.startScenario(SCENARIOS[idx]); this.run(i, seconds);
+    return { state: st.ctl.state, alarms: [...st.ctl.alarms.values()].map(a => SEV_NAME[a.sev] + ': ' + a.msg),
+             log: LOG.filter(e => e.st === st.name).map(e => `${fmtT(e.t)} ${e.sev ? SEV_NAME[e.sev] + ' ' : ''}${e.msg}`) }; },
+};
+
+wire(); buildTabs(); onStationChange();
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

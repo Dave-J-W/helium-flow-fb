@@ -1,9 +1,14 @@
 # Helium purge with O2 feedback: design
 
-Date: 2026-09-24
-Status: design under review. No code has been written. No PV has been created or written.
-Measured enclosure physics from the 17–24 Sep 2026 archiver data were added on 2026-09-24 (section 2.1).
-Values they confirm or replace are tagged MEASURED where they appear.
+- **Date:** 2026-09-24, last updated 2026-09-25.
+- **Status:** design under review. No code has been written. No PV has been created or written.
+- **Measured data:** enclosure physics from the 17–24 Sep 2026 archiver data were added on
+  2026-09-24 (section 2.1). Values they confirm or replace are tagged MEASURED where they appear.
+- **Decided 2026-09-25:**
+  - implementation: synApps `epid` + SNL
+  - IOC: `15LSS_sample_gas`, port 20125
+  - PV prefix: `15IDC:SampleGas:`
+  - the Alicat is resumed from hold automatically
 
 ## 1. Purpose
 
@@ -55,7 +60,30 @@ Facts from `Alicat_BC.db` that the design depends on (VERIFIED):
 - `Run` sends `C`, which resumes from hold.
 - `FlowUnits_RBV` reports the units string.
 
-Writes this design makes to **existing** PVs. Both need sign-off from the owner of the Alicat IOC:
+Production Alicat IOC (from the user's `iocIpExample` folder, 2026-09-25):
+- `start_Alicat` runs `Alicat.cmd` in `ip-R2-22/iocs/ipExample/iocBoot/iocIpExample`. It loads
+  `$(IP)/ipApp/Db/Alicat_BC.db` with `P=15IDC:, R=Alicat1:, ID=A, PORT=serial1`.
+- The link is asyn IP to a terminal server at `10.54.170.22:8886`, with `\r` terminators.
+- Upstream ip R2-22 has no Alicat support. The deployed `Alicat_BC.db` and `.proto` in the local
+  ip-R2-22 tree are **identical to upstream ip master** (diffed 2026-09-25).
+- Production module versions: asyn R4-44-2, calc R3-7-5, StreamDevice 2-8-24, seq R2-2-9. Base
+  is at `/usr/local/epics/base`, version not yet known.
+
+Measured from `alicat_trace` (asyn trace, 2026-06-18, ~3.6 min; VERIFIED on the wire):
+- Poll cycle: `A` → `A +27.9 +00.70 +000084.17 +00.47 +100.00 He HLD`. The fields are temperature,
+  flow, total, setpoint, valve %, gas and status, matching the `getTemperature` protocol.
+  This is followed by `A SR` → `A +1.00000 SLPM 4 sec`.
+- The cycle repeats every **0.5 s**, although the deployed db's `ReadSettingsScan` is "1 second".
+  Possible causes: a different db was loaded in June, or a second client was polling.
+  Unresolved and harmless: 1 Hz is enough for this design.
+- **Time-unit code 4 = seconds** (VERIFIED): the ramp reply reads "SLPM 4 sec". The ramp rate
+  was **1.0 SLPM/s** at the time. The user reports 3 SLPM/s now.
+- **Status was `HLD`** throughout: valve held at 100 %, flow 0.70 → 0.63 SLPM against a 0.47
+  setpoint. So `Running_RBV` = 0 and `Setpoint` writes would be silently disabled (`SDIS`).
+  This is exactly the case the PRECHECK `Run` step (4.1) exists for, and it happens in practice.
+
+Writes this design makes to **existing** PVs. They were approved by the user, who owns the
+Alicat IOC, on 2026-09-24:
 - `$(P)$(R)Setpoint`: purge, handoff, PID output and zero flow.
 - `$(P)$(R)RampRate`: clamped only when out of range (section 5.3).
 - `$(P)$(R)Run`: resume from hold.
@@ -206,6 +234,30 @@ The model's known departures are listed in 2.1.5.
 
 Keeping the watchdog in the sequencer keeps every timing rule in one readable file.
 
+### 3.1 Two stations, one IOC (requested 2026-09-25)
+
+`15LSS_sample_gas` hosts one independent controller **per station**. Each station has its own
+records, `epid`, state machine, parameters and autosave file.
+
+```
+# st.cmd (sketch)
+dbLoadRecords("db/sampleGas.db", "P=15IDC:SampleGas:,MFC=15IDC:Alicat1:,O2=15IDC:D1Dmm_calc,CYL=")
+dbLoadRecords("db/sampleGas.db", "P=15IDE:SampleGas:,MFC=<15IDE Alicat>,O2=<15IDE O2 PV>,CYL=")
+iocInit
+seq sampleGas, "P=15IDC:SampleGas:,MFC=15IDC:Alicat1:,O2=15IDC:D1Dmm_calc"
+seq sampleGas, "P=15IDE:SampleGas:,MFC=<15IDE Alicat>,O2=<15IDE O2 PV>"
+```
+
+- **Reentrant SNL.** The program is compiled reentrant (`option +r`), so two instances run
+  side by side with no shared variables.
+- **Adding a station** means two lines in `st.cmd`, not new code.
+- **Per-station enclosure modes.** Each station has its own mode list and parameters in Deep
+  admin. 15IDE's enclosures will have their own base flows.
+- **Trade-off.** One process means an IOC crash stops both stations' controllers at once. In
+  each case the Alicats hold their last flow, and there is one restart. Accepted in exchange
+  for one IOC to build, deploy and maintain.
+- **15IDE PV names:** still to be supplied.
+
 ## 4. States
 
 ```
@@ -255,7 +307,23 @@ BASIS manual.**
 2. Write 20 SLPM.
 3. Start the purge timer when `Flow_RBV` first reaches 95 % of 20 SLPM. At 3 SLPM/s that takes
    about 6.5 s.
-4. **Drop check at 60 s** (on the purge timer):
+4. **Lid check from purge kinetics** (REVISED 2026-09-25 at the user's direction; supersedes the
+   `MinDrop` rule below):
+   - With the lid on, O2 decays as exp(−F·t/V). With the lid open, the helium rises out of the
+     enclosure and the decay is **at least 2× slower** (user's physical expectation).
+   - **Measure** the decay rate k_obs = ln(C(20 s) / C(60 s)) / 40 s, with times counted from full
+     flow. The window starts after the ~10 s transport delay and sensor lag at 20 SLPM.
+   - **Compare** it with the lid-on rate k_exp = F/V (20 SLPM / 41 L = 0.0081 /s).
+   - **Decide:** if k_obs < `openSlopeFrac` (0.5) × k_exp → **OPEN_STOP**.
+   - The measure is independent of the starting level, so it does not depend on ambient O2.
+   - The skip below `dropSkipLevel` (18 %) is kept as a second guard.
+   - **Deep-admin parameters:** `V` (41 L), `kinT1` (20 s), `dropCheckTime` (60 s),
+     `openSlopeFrac` (0.5).
+   - **Simulator result:** closed lid 100 % of k_exp (reality: apparent V 39–42 L, so ~95–105 %).
+     Open lid 0 % with the default model. The open box would only pass if its air exchange were
+     ~10× weaker than modelled (`openMix` ≤ 0.05). The open-lid purge test settles this.
+
+   *Superseded rule, kept for reference:* **Drop check at 60 s** (on the purge timer):
    - Skip it if `O2_start` < 18 %. O2 that low proves the enclosure was closed.
    - Otherwise require `O2_start − O2_now` ≥ `MinDrop`. Default `MinDrop` = 1.0 % O2
      (PROVISIONAL; tune from logged purges).
@@ -340,6 +408,29 @@ The two terms separate a lift from every sealed behaviour recorded:
 - **Pre-lift warning (optional, n=1).** In the 20 s before lift A, O2 rose at 0.16 %/min, 5× the flow-off leak-in. It could serve as an early "clamps released" hint, but one event is not enough to act on.
 - **Not covered:** the collimator lid has no 10 s record. The lift kinetics are expected to be similar (same box and sensor), but this is unverified.
 
+### 4.6.2 Continuous hold monitor (DECIDED 2026-09-25: resume automatically)
+
+- **Why.** In `HLD` the Alicat holds its **valve** at a fixed opening and ignores the setpoint.
+  The 2026-06-18 trace shows the valve at 100 % and 0.7 SLPM flowing against a 0.47 setpoint.
+  Meanwhile `Setpoint` writes are skipped (`SDIS` on `Running_RBV`).
+- **Rule.** Users stop helium only by setting flow to 0, never by holding the valve.
+- **Where it applies.** In every state where the sequencer owns the flow: PURGE, HANDOFF,
+  REGULATE, OPEN_LOOP, FLOW_ZERO and OPEN_STOP. The zero-flow states are included, because a held
+  valve keeps helium flowing whatever the setpoint says.
+- **Trigger.** `Running_RBV` = 0 for 3 s.
+- **Action:**
+  1. Write `Run`.
+  2. Once `Running_RBV` = 1, **re-send the last commanded setpoint** by writing it again with
+     processing. While the record was disabled, its VAL may have changed without ever being sent
+     to the device. Whether `epid` rewrites an unchanged output every scan is **unverified**.
+     The explicit resend makes recovery certain either way.
+  3. MINOR alarm "MFC was on hold, resumed". Log it and increment `OverrideCount`.
+- **If it's still on hold after 3 attempts 10 s apart:** MAJOR "MFC on hold, cannot resume".
+  Keep retrying every 60 s.
+- **IDLE** is excluded: there the controller does not own the flow.
+- The deployed `Alicat_BC.db` and `.proto` are identical to upstream ip master (diffed
+  2026-09-25).
+
 ### 4.7 IOC restart
 
 The Alicat holds its last setpoint on its own, so helium keeps flowing if the IOC dies
@@ -361,11 +452,13 @@ The Alicat holds its last setpoint on its own, so helium keeps flowing if the IO
 | Lid lifted and replaced between purges faster than the archive samples (seen once: 2 min open, 24 Sep 11:52) | follows the operator's Flow Zero / Purge | none | Operator presses Purge. **Archive O2 at 1 Hz or 10 s**: a 600 s archive can miss the whole event |
 | Target − Δ not reached at 6.5 min | PID (via HANDOFF) | MINOR "purge incomplete". The flow-high alarm will likely follow. | Automatic |
 | O2 analyzer invalid or frozen | Expected flow, fixed (OPEN_LOOP) | MAJOR "O2 lost, running blind" | Operator presses Resume PID once O2 returns |
-| MFC on hold and `Run` did not clear it | none possible | MAJOR "MFC on hold" | Operator |
+| MFC went on hold (any controller-owned state, 4.6.2) | valve held at its last opening, until resumed | MINOR "MFC was on hold, resumed" | Automatic: `Run`, then re-send the setpoint |
+| MFC on hold and 3 `Run` attempts failed | valve held (may be flowing, may be closed) | MAJOR "MFC on hold, cannot resume" | Operator. Controller keeps retrying every 60 s. |
 | Ramp rate out of range | unaffected (clamped) | MINOR, logged | Automatic |
 | Gas table ≠ He | unaffected | MINOR | Operator, optional |
 | Flow ≥ 1.5× expected | PID | MINOR "flow high, check enclosure" | Automatic |
 | Flow ≥ 2× expected, or PID pinned at `DRVH` for 10 min | PID | MAJOR "flow too high, check enclosure seal" | Operator |
+| Controller IOC down (crash; procServ runs `--noautorestart`) | Alicat holds its last setpoint | None from this IOC. A heartbeat PV going stale can be watched by the alarm server or the easy-bluesky watchdog. | Operator restarts it via `start_ioc 15LSS_sample_gas`. On restart, the rules in 4.7 apply. |
 | Flow not matching setpoint (see 5.1) | PID continues | MAJOR "flow mismatch: cylinder empty or MFC fault?" | Operator |
 
 Zero flow happens only for a confirmed open enclosure or an explicit operator request.
@@ -441,6 +534,15 @@ Both overrides are logged to `$(PP)LastAction` and increment `$(PP)OverrideCount
 | τI = 4(τc + θ) | 1140 s | 1140 s |
 | → `KP`, `KI` | **−9.3, 8.8e-4 /s** | **−4.4, 8.8e-4 /s** |
 
+- **Retuned 2026-09-25 in the simulator.**
+  - **Mode B now uses `KP` = −10, `KI` = 1.4e-3.** With the old −4.4 / 8.8e-4 it overshot to
+    ~1.06 % after disturbances and stayed outside ±0.02 % for 16–23 min.
+  - The table above used θ ≈ 95 s. The full model's effective dead time is ~60 s for mode B
+    (transport 30 s + sensor-zone lag 19 s + averaging and scan 10 s) and ~155 s for mode A.
+  - With the new gains, a 30 % worse lid seal stays inside ±0.02 %, and a target step settles in
+    ~5 min. They were checked at targets 0.5–2 %, seal 0.7–1.3× and flow 0.45–1.6 SLPM without
+    oscillation. `KP` = −12 began to swing the flow at low flow.
+  - **Mode A is unchanged** (−9.3 / 8.8e-4). It was already adequate.
 - **The model-derived `KP` is 10–20× the provisional −0.4.** The provisional gains would regulate very slowly: an upset of 0.1 % O2 would move the flow by only 0.04 SLPM at first.
 - **Noise check for the high gain.** Sensor noise is ~0.001 % per sample, and less after the 10-sample mean. × 9.3 that is ≤ 0.01 SLPM, at the MFC's resolution, so the high gain is noise-safe.
 - These are **starting points for the bump tests, not final values**. Treat them as an upper bound on aggressiveness until 6.2 is done.
@@ -479,6 +581,33 @@ Change one knob at a time.
 
 ## 7. Operator interface
 
+`$(PP)` = `15IDC:SampleGas:` in production and `SIM:SampleGas:` on the bench (section 9.2).
+
+### 7.0 Screen hierarchy (Phoebus `.bob`; requested 2026-09-25)
+
+Three levels. Every screen takes the station prefix as a macro, so the same screen files serve
+15IDC and 15IDE (7.4).
+
+| Level | Audience | Content |
+|---|---|---|
+| **Main panel** | Users | Large readouts: **O2 %**, **flow (SLPM)**, **flow setpoint**, **cylinder pressure**. State and in-range indicator. Alarm banner showing the current `LastAction`/alarm text. O2 and flow trend plot. Buttons: **Purge**, **Flow Zero**, **Resume PID** (enabled only in OPEN_LOOP). Selectors: **enclosure mode**, **O2 target**. A button opens Admin. |
+| **Admin** | Beamline staff | Tolerance and Δ. Purge settings: flow, timeout, drop check. PID gains and output limits per mode. Override log and counter. Alarm thresholds. A button opens Deep admin. |
+| **Deep admin** | Instrument scientist | **Every physical and threshold number, as an editable, autosaved field:** mode base flows and exponents n; lid threshold, filter time and `LidSlope`; drop-check time, `MinDrop` and skip level; ambient O2; ramp-rate clamps (2 / 5 SLPM/s); hard flow ceiling; flow-mismatch tolerance and margin; hold-monitor timing and retries; O2 frozen and invalid limits; averaging count; `epid` scan and `ODEL`. Also the station's linked PV names (Alicat prefix, O2 PV, cylinder PV), shown read-only because they are set at IOC start. |
+
+- Nothing physical is hard-coded in the SNL program. It reads every number from these records.
+  Each parameter record carries DRVL/DRVH so a typo cannot set, e.g., a 200 SLPM ceiling.
+- Phoebus has no per-screen login. "Admin" and "Deep admin" are separate displays reached by
+  button. If stronger protection is wanted, EPICS access security can restrict writes to the
+  deep-admin records by host or user.
+
+### 7.0.1 Cylinder pressure
+
+- The PV **does not exist yet**. It is passed in as the macro `CYL` (e.g.
+  `CYL=15IDC:HeCyl:Pressure`).
+- If `CYL` is empty or not connected, the main panel shows "n/a" and nothing depends on it.
+- A future end-state row, "cylinder pressure low", can be added once the PV exists. It would
+  also let the flow-mismatch alarm tell "cylinder empty" apart from "MFC fault".
+
 | PV | Type | Purpose |
 |---|---|---|
 | `$(PP)Mode` | mbbo | A / B |
@@ -494,6 +623,35 @@ Change one knob at a time.
 | `$(PP)O2PID` | epid | Loop. Gains and limits are loaded from the mode. |
 
 Per-mode parameters (base flow, `KP`, `KI`, `DRVH`, alarm multipliers) are autosaved.
+
+## 7.5 Graphical simulator for spec review (built 2026-09-25)
+
+`simulator/sample_gas_simulator.html` is a single file that opens in any browser. It is an
+executable version of this spec, not IOC code. It contains:
+- the §2.1 plant model and the Alicat behaviour (ramp, hold/`SDIS`, resolution, cylinder)
+- the §4 state machine and the exact `epid` algorithm
+- the three screen levels from §7.0 and two independent stations
+- world controls, trend plots, an event log and 17 scenario presets from §8
+- a time scale of 1× to 3000×
+
+Findings from the first scenario runs, to be decided:
+1. **Purge timeout vs Δ (confirms 4.2).** From air, the 6.5 min timeout fires before O2 < target − Δ.
+   The "purge incomplete" MINOR alarm is therefore raised on essentially every purge from air.
+2. **Alarms need a debounce.** Without one, "O2 above range" toggled MINOR↔MAJOR every second
+   at a threshold. The simulator uses `alarmDelay` = 10 s (the level must persist; this is like
+   the EPICS `HYST`/delay pattern). Proposed for the real records.
+3. **Flow/O2 alarms need a settle time.** A legitimate target change (0.99 → 0.50 %) saturates
+   the PID at `DRVH` for tens of minutes. That raised "flow ≥ 2× expected", "PID pinned" and "O2
+   abnormally high" as MAJOR alarms with nothing wrong. The simulator suppresses these for
+   `alarmSettle` = 30 min after feedback-on or a target change. For a 0.99 → 0.50 % change in
+   mode A that is still too short. Choose the value, or make the flow alarm relative to the
+   PID's own demand.
+4. **Open-box drop margin is thin (model assumption).** With the lid open, a 20 SLPM purge drops
+   the reading by ~0.65 % in 60 s in the model, against `MinDrop` = 1.0 %. The open-lid purge
+   test (§8.3) is essential before trusting the drop check.
+5. **Mode-A recovery after a purge is slow.** After handoff O2 sits ~0.2 % below target. The PID
+   holds flow at `DRVL` (0.125 SLPM) and O2 takes about an hour to rise back to target.
+   This saves helium, but it is worth knowing.
 
 ## 8. Testing strategy
 
@@ -531,10 +689,24 @@ Per-mode parameters (base flow, `KP`, `KI`, `DRVH`, alarm multipliers) are autos
 
 ## 9. Open decisions
 
-1. **Host IOC.** Either the existing Alicat or analyzer IOC, if it includes seq, std, calc and
-   autosave, or a new soft IOC. Decides the build and who maintains it.
-2. **PV prefix `$(PP)`.** Needs approval before any record is created.
-3. **Owner sign-off** for writes to Alicat `Setpoint`, `RampRate` and `Run`.
+1. **Host IOC: DECIDED 2026-09-25.**
+   - **Implementation:** a new synApps soft IOC, `epid` + SNL, separate from the Alicat process.
+   - **Names:** procServ/`start_ioc` name `15LSS_sample_gas`, port 20125. The compiled app name
+     must start with a letter.
+   - **Production:** the Linux soft-IOC host, under
+     `$SUPPORT/ChemMat/iocBoot/`, following the existing
+     `start_ioc` conventions.
+   - **Restart:** procServ runs with `--noautorestart`, and crontab starts IOCs after a reboot.
+     An IOC crash therefore needs a manual restart. Meanwhile the Alicat holds its last flow and
+     there is no regulation or lid detection. See the end-state row "Controller IOC down".
+   - **Development:** the MinGW bench on the Windows PC (base 7.0.8.1, seq, std, calc,
+     autosave, asyn).
+2. **PV prefix `$(PP)`: DECIDED 2026-09-25 as `15IDC:SampleGas:`** (e.g. `15IDC:SampleGas:State`,
+   `15IDC:SampleGas:O2PID`). This shares the `15IDC:` namespace with live beamline PVs, so
+   the bench and simulator **never** use it. They run as `SIM:SampleGas:` against simulated
+   `SIM:Alicat1:` and `SIM:O2` on localhost. The real prefix is applied only at deployment.
+3. **Owner sign-off** for writes to Alicat `Setpoint`, `RampRate` and `Run`: **given** by the
+   user, who owns the Alicat IOC. No live writes happen until the simulator-only rule is lifted.
 4. **PROVISIONAL values to confirm on hardware** (status after the 2.1 data):
    - `MinDrop` 1.0 %: a closed box drops 6.8–7.4 %. **Still needs the open-box purge measured.**
    - Ambient O2 19.4 %: **MEASURED** 19.0–19.6 %, relaxing after a lift; a model value of 19.4 % is fine.
