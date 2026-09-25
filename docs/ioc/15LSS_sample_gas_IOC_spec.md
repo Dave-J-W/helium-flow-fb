@@ -874,7 +874,7 @@ explicitly.
 - **Use the reference's message texts verbatim** (they are the acceptance-test oracle, §14).
 - **Log line format:** `YYYY-MM-DD hh:mm:ss  <STN>  [MINOR|MAJOR]  <text>`.
 
-### 8.20 Write enable and shadow mode (NEW; not in the simulator)
+### 8.20 Write enable and shadow mode (NEW; not in the simulator; approved by the user 2026-09-25)
 
 - **`Par:writeEnable`** (bo, autosaved). **Default 0 for the first production deployment.**
 - **When 0, shadow mode:** the controller runs every rule, but:

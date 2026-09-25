@@ -11,6 +11,8 @@
   - IOC: `15LSS_sample_gas`, port 20125
   - PV prefix: `15IDC:SampleGas:`
   - the Alicat is resumed from hold automatically
+  - shadow mode: the IOC's write-enable defaults to off at first deployment, so it computes and
+    logs what it would do without writing to the Alicat (IOC spec §8.20)
 
 ## 1. Purpose
 
