@@ -596,6 +596,35 @@ hold, lid and purge alarms have their own timing and are not gated.
 - **IOC implementation:** the 1-min usage log and the per-window regressions are simple enough
   for the SNL program (a 5760-point array), with results published to records.
 
+### 5.6 Helium ledger: cylinders and helium per user run (ADDED 2026-09-25)
+
+- **Litre count:** monotonic, the sum of positive steps in `Total_RBV`, so a totalizer reset
+  cannot corrupt it.
+- **Events,** each stored with a timestamp and the litre count:
+  - purge start (PURGE entry)
+  - flow set to zero (FLOW_ZERO or OPEN_STOP entry)
+  - new cylinder ("New He cylinder fitted")
+- **Snapshots:** hourly snapshots of the litre count.
+- **Storage:** events and snapshots are kept for `reportDays` + 10 days, persisted across IOC
+  restarts (autosaved waveforms).
+- **User run:** a series of purges. Flow-zero events between purges are sample changes within
+  the run.
+  - The run **ends at the first flow-zero after its last purge**. If there is none, it ends at
+    the last purge.
+  - It counts as finished once no purge follows for `runGap` (24 h).
+  - Per run: start, end, number of purges, litres (exact, from the boundary events) and cylinder
+    changes.
+- **Report window:** `reportDays` (60) **ending at the end of the latest user run**, so idle
+  time afterwards does not dilute it. It shows:
+  - helium dispensed (L)
+  - litres during user runs, clipped to the window
+  - cylinders fitted
+  - cylinder-equivalents (litres ÷ `cylCapacityL`)
+  - the run table
+- **Where it appears:** Admin screen ("Helium usage report").
+- **Simulator check:** three runs over 14 days (2524, 2524 and 1261 L). Dispensed = sum of runs
+  = Alicat totalizer = 6309 L, with 0 L outside runs (flow is at zero between runs).
+
 ### 5.2 Expected flow
 
 Model (MEASURED, 2.1.4): C_ss = J(F)/F, with ingress J = a·F^b per lid. So:
