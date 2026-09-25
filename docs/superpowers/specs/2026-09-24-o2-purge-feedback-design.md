@@ -203,6 +203,28 @@ The model's known departures are listed in 2.1.5.
 - In the high-res export it read **0.43 and 19.55 SLPM mid-ramp**, so it may report a ramping, not final, setpoint.
 - Whether the PV itself or only its archiving misses the events is unknown. The flow-mismatch rule (5.1) compares `Setpoint_RBV` with `Flow_RBV`, so this matters (section 9).
 
+### 2.1.10 Reading noise at 1 Hz (MEASURED 2026-09-25; `analysis/noise_analysis.py`, fig 14)
+
+- **Record:** 30 min at 1 Hz, normal lid, setpoint 0.25 SLPM (Flow_RBV 0.24–0.26). O2 was 0.905 →
+  0.932 %, and the trend was removed before analysis.
+- **White sensor noise:** **0.84 m%** per 1 Hz sample.
+- **Real O2 wander:** an Ornstein–Uhlenbeck process, **σ 0.67 m% (0.073 % of level), τ 79 s**.
+  It is the Allan-deviation floor of 0.32–0.44 m% from 10 to 300 s. The user judges it real
+  (leak / temperature), not analyzer drift. Model fit: rms log error 0.04, against 1.14 for
+  white noise alone.
+- **Averaging:** the 20-sample mean floors at 0.59 m%. The 10 s archive (0.95 m% per sample over
+  36 windows) agrees with the model (0.87 m%).
+- **Consequence for the controller:** the reading scatters by ~1 m%, 20× inside the ±20 m%
+  tolerance. The steady-state wiggle near target is this noise and wander, **not a loop
+  oscillation**. Simulator comparison (§7.5):
+  - The single gain set with a 10-sample mean holds the true O2 best: 0.69–0.72 m% std.
+  - Softer near-target gains (a "fine band", available in Deep admin, off by default) or more
+    smoothing cut MFC moves from 26–33 to 5–10 per hour. They let more real wander through
+    (0.74–0.96 m%) and weaken disturbance rejection: a 30 % worse seal is out of band for up to
+    9 min, against 0.
+  - **Recommendation:** keep the single gain set. Any fine band must be several times wider than
+    the ~1 m% scatter, i.e. ≥ 0.005 % absolute, not a percentage of target.
+
 ## 3. Architecture
 
 ```
@@ -866,7 +888,8 @@ Findings from the first scenario runs, to be decided:
      - Sensor-zone lag: first-order, τ = 65 s, applied to the bulk C.
      - Lid lift: exponential to ambient with τ = 5.75 s.
      - Ambient: 19.5 % relaxing to 19.2 % over 1.5 h, plus an occasional −0.6 % dip lasting ~1 min.
-     - Noise: 0.001 % per sample.
+     - Noise (REVISED 2026-09-25, 2.1.10): white 0.00084 % per 1 Hz sample, plus real O2 wander
+       (Ornstein–Uhlenbeck, relative σ 7.3e-4, τ 79 s). Previously 0.001 % white only.
    - **Extra scenarios from the data:**
      - Operator Flow Zero with the lid kept on for 22 min (must not trip the lid detector).
      - A lift 76 s after Flow Zero, open 2 min, then Purge (24 Sep 11:52).

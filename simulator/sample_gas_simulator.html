@@ -269,6 +269,8 @@ function defaultControllerParams() {
     frozenTime: 30, o2Min: -0.5, o2Max: 25,
     avgN: 10, pidScan: 10, odel: 0.01,
     gainSchedule: 1,       // 1 = KP scaled by 0.99/target (mode KP values are "at 0.99 %"); 0 = fixed KP
+    fineBand: 0,           // % O2; 0 = off. Inside |error| < fineBand, KP and KI are multiplied by the fine factors
+    fineKPx: 0.5, fineKIx: 1.0,   // (leave the band at 2 × fineBand: hysteresis). Switching is near-bumpless because error is small.
     flowMinorX: 1.5, flowMajorX: 2.0, flowLowX: 0.5, pinnedTime: 600, o2AbnormalOffset: 0.3,
     alarmDelay: 10,        // s a level must persist before an alarm is raised, changed or cleared (EPICS-style debounce)
     // Settling logic (replaces a fixed settle time): after feedback-on or a target change the loop is "settling"
@@ -299,7 +301,9 @@ function defaultPlantParams() {
     zoneTauHold: 65,                         // s, sensor-zone lag at hold flow (MEASURED)
     delayA: 9, delayB: 17.7, delayMax: 75,   // transport delay = min(max, A + B/F) s
     ambientBase: 19.2, ambientPeak: 19.5, ambientRelax: 1800,
-    noise: 0.001,                            // % per 1 Hz sample
+    noise: 0.00084,                          // % per 1 Hz sample, white (MEASURED 2026-09-25, 1 Hz record, normal lid)
+    wanderRel: 7.3e-4,                       // real O2 wander, relative σ (0.67 m% at 0.92 %; MEASURED, believed real)
+    wanderTau: 79,                           // s, correlation time of the wander (Allan-deviation fit, analysis/noise_analysis.py)
     alicatTau: 0.5, alicatRes: 0.01, alicatMax: 20, holdOpenFlow: 0.7,
     cylP0: 2000, cylLitersPerPsi: 4.25, cylPempty: 30, cylPfull: 150,
   };
@@ -319,7 +323,7 @@ class Plant {
     this.C = amb; this.zone = amb;
     this.histLen = Math.ceil(200 / DT);
     this.hist = new Float64Array(this.histLen).fill(amb); this.hi = 0;
-    this.dEff = pp.delayMax; this.delayed = amb;
+    this.dEff = pp.delayMax; this.delayed = amb; this.wander = 0;
     this.a = { spVal: 0, spDev: 0, spRamped: 0, flow: 0, running: true, stuck: false, holdFlow: 0, ramp: 3, gas: 'He', total: 0 };
     this.cylP = pp.cylP0; this.cylPresent = false;   // the cylinder-pressure PV does not exist yet
     this.an = { mode: 'normal', value: amb, sevr: 0 };
@@ -376,7 +380,9 @@ class Plant {
     const dWant = this.lid === 'open' ? 2 : Math.min(pp.delayMax, pp.delayA + pp.delayB / Math.max(F, 0.2));
     if (dWant < this.dEff) this.dEff = dWant; else this.dEff = Math.min(dWant, this.dEff + 0.5 * dt);
     const lag = Math.min(this.histLen - 1, Math.round(this.dEff / DT));
-    this.delayed = this.hist[(this.hi - lag + this.histLen) % this.histLen];
+    // Real O2 wander (Ornstein–Uhlenbeck, relative): slow leak / temperature fluctuations seen in the 1 Hz data
+    this.wander += -this.wander * dt / pp.wanderTau + pp.wanderRel * Math.sqrt(2 * dt / pp.wanderTau) * gauss();
+    this.delayed = this.hist[(this.hi - lag + this.histLen) % this.histLen] * (1 + (this.lid === 'open' ? 0 : this.wander));
   }
   sampleAnalyzer() {                         // 1 Hz
     const an = this.an;
@@ -509,6 +515,12 @@ class Controller {
     // Gain scheduling: the process slope dC/dt per SLPM is ≈ C/V, i.e. proportional to the target, so the
     // mode's KP (tuned at 0.99 %) is scaled by 0.99/target to keep the loop gain constant. KI (repeats/s) is unchanged.
     e.VAL = p.target; e.KP = p.gainSchedule ? m.KP * (0.99 / p.target) : m.KP; e.KI = m.KI; e.ODEL = p.odel;
+    // Optional fine band near target (gap control): softer gains once |error| is small, with hysteresis
+    if (p.fineBand > 0 && isFinite(e.CVAL)) {
+      const err = Math.abs(e.VAL - e.CVAL);
+      if (this.inFine) { if (err > 2 * p.fineBand) this.inFine = false; } else if (err < p.fineBand) this.inFine = true;
+      if (this.inFine) { e.KP *= p.fineKPx; e.KI *= p.fineKIx; }
+    } else this.inFine = false;
     e.DRVH = Math.min(m.drvh, p.hardCeiling);
     e.DRVL = Math.min(e.DRVH, m.drvl);   // per-lid minimum flow (no global floor)
   }
@@ -1252,6 +1264,9 @@ const DEEP_FIELDS = [
   F('pidScan', 'epid scan period', 's', 1, 120, 1, true),
   F('odel', 'epid ODEL (output deadband)', 'SLPM', 0, 0.5, 0.005),
   F('gainSchedule', 'Gain scheduling: KP × 0.99/target (1 = on, 0 = off)', '', 0, 1, 1, true),
+  F('fineBand', 'Fine band near target (0 = off)', '%', 0, 0.5, 0.005),
+  F('fineKPx', 'Fine band: KP multiplier', '×', 0, 2, 0.05),
+  F('fineKIx', 'Fine band: KI multiplier', '×', 0, 2, 0.05),
   F('alarmDelay', 'Alarm debounce (level must persist)', 's', 0, 300, 1, true),
   F('flowAlarmDelay', 'Flow-high/low and O2-range alarms must persist', 's', 0, 3600, 10, true),
   F('progressMin', 'Settling: floor on required O2 rate toward target', '%/min', 0.0001, 0.1, 0.0001),
@@ -1275,7 +1290,8 @@ const PLANT_FIELDS = [
   F('openTau', 'Lid-lift time constant', 's', 1, 60, 0.25), F('openMix', 'Open-lid air exchange multiplier', '', 0.01, 5, 0.01),
   F('zoneTauHold', 'Sensor-zone lag at hold flow', 's', 1, 300, 1), F('delayA', 'Transport delay A (A + B/F)', 's', 0, 60, 0.5),
   F('delayB', 'Transport delay B (A + B/F)', 's·SLPM', 0, 60, 0.1), F('delayMax', 'Transport delay maximum', 's', 5, 190, 1),
-  F('noise', 'Analyzer noise per sample', '%', 0, 0.05, 0.0005), F('holdOpenFlow', 'Flow with valve held at 100 %', 'SLPM', 0, 20, 0.1),
+  F('noise', 'Analyzer white noise per 1 Hz sample', '%', 0, 0.05, 0.0001),
+  F('wanderRel', 'Real O2 wander, relative σ', '', 0, 0.01, 0.0001), F('wanderTau', 'Real O2 wander correlation time', 's', 5, 3600, 5), F('holdOpenFlow', 'Flow with valve held at 100 %', 'SLPM', 0, 20, 0.1),
   F('cylLitersPerPsi', 'Cylinder litres per psi', 'L/psi', 0.5, 50, 0.25), F('alicatTau', 'MFC flow response τ', 's', 0.05, 10, 0.05),
 ];
 

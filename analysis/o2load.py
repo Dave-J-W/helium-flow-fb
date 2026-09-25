@@ -27,6 +27,8 @@ FLOW_FILE = DATA_DIR + r"\alicat flow rbv Sep.csv"
 HR_O2 = DATA_DIR + r"\oxygen level rbv Sep high res 4 hours.csv"
 HR_SP = DATA_DIR + r"\alicat setpoint rbv Sep high res 4 hours.csv"
 HR_FLOW = DATA_DIR + r"\alicat flow rbv Sep high res 4 hours.csv"
+# 1 Hz O2, 25 Sep 14:31-15:01, normal lid, flow setpoint 0.25 SLPM (Flow_RBV 0.24-0.26); copied 2026-09-25
+O2_1HZ = DATA_DIR + r"\oxygen level 1 Hz 25 Sep normal lid 0.25 SLPM.csv"
 GAS = "He"
 TOL_ABS, TOL_REL = 0.05, 0.10
 

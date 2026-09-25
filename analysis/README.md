@@ -137,6 +137,39 @@ Events: **A** is flow off → lift → 1.7 h open → unlogged purge. **C** is a
 * **Caveat:** the fast numbers come from **two lifts, two purges and one sealed flow-off, all with the normal lid**.
   The collimator lid needs its own 10 s record before these thresholds are hard-coded for it.
 
+## 9. Reading noise at 1 Hz: white sensor noise + slow real wander (fig 14; `python noise_analysis.py`)
+
+**Record:** `data/oxygen level 1 Hz 25 Sep normal lid 0.25 SLPM.csv`.
+* 25 Sep 14:31–15:01 (30 min, 1801 samples).
+* Normal lid, Alicat setpoint 0.25 SLPM (Flow_RBV 0.24–0.26).
+* O2 rose 0.905 → 0.932 % (+0.83 m%/min), so a cubic trend is removed first.
+* 1 m% = 0.001 % O2.
+
+**Results:**
+* **White sensor noise:** 0.84 m% per 1 Hz sample (first-difference estimate). It averages down
+  as expected at first: 0.41 m% over 5 s, 0.34 m% over 10 s.
+* **Slow wander:** past ~10 s, averaging stops helping.
+  * The Allan deviation of the detrended record levels off at **0.32–0.44 m% from 10 to 300 s**.
+  * Samples stay correlated: +0.34 at 1 s lag, +0.13 at 60 s.
+  * The spectrum has broad bumps at 4–15 min periods.
+  * The user judges this to be **real O2** (leak / temperature), not analyzer drift. This record
+    alone cannot separate the two.
+* **Model:** white σ_w = **0.84 m%** + Ornstein–Uhlenbeck wander σ_o = **0.67 m%** (0.073 % of
+  level), τ = **79 s**.
+  * Fitted to the Allan deviation over τ 1–300 s: rms log error 0.04, against 1.14 for white
+    noise alone.
+  * The controller simulator uses exactly these numbers.
+* **Averaging:** a 20-sample mean reduces the residual to 0.59 m%, a 30-sample mean only to
+  0.56 m%. The wander sets the floor.
+* **Cross-check against the 10 s archive:** 36 steady windows near 1 % scatter by 0.95 m% per
+  sample. The model predicts 0.87 m%.
+* **For the controller:** total reading scatter ~1 m% is about 20× inside the ±20 m% tolerance.
+  In simulation, the current PID (10-sample mean, single gain set) holds the **true O2** to
+  0.69–0.72 m% std. More smoothing or softer near-target gains cut MFC moves (26–33 → 5–10 per
+  hour) but let more of the real wander through (0.74–0.96 m%).
+* **Caveat:** one record, one lid, one level. There is an unexplained +2 m% step at 16.5 min,
+  included in the fit. A collimator-lid 1 Hz record would complete this.
+
 ## Limits
 * The weekly O2 is sampled every 10 min, so faster kinetics there are bounded, not measured, and short lid lifts can be missed (24 Sep 11:52, now measured at 10 s).
 * The one-volume model does not include slow post-purge tails (e.g. 19 Sep 00:39–05:19). A second, slow O2 reservoir is likely.

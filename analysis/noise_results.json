@@ -1,0 +1,74 @@
+{
+ "record": {
+  "file": "oxygen level 1 Hz 25 Sep normal lid 0.25 SLPM.csv",
+  "samples": 1801,
+  "span_min": 30.0,
+  "level_start_pct": 0.9051,
+  "level_end_pct": 0.9318,
+  "trend_m%_per_min": 0.833,
+  "flow": "setpoint 0.25 SLPM, Flow_RBV 0.24-0.26",
+  "lid": "normal"
+ },
+ "white_noise_m%_per_1Hz_sample": 0.839,
+ "residual_std_m%_after_cubic_detrend": 1.033,
+ "allan_dev_m%": {
+  "1": 0.839,
+  "2": 0.613,
+  "3": 0.518,
+  "5": 0.405,
+  "7": 0.356,
+  "10": 0.336,
+  "15": 0.322,
+  "20": 0.317,
+  "30": 0.321,
+  "45": 0.341,
+  "60": 0.378,
+  "90": 0.433,
+  "120": 0.439,
+  "180": 0.391,
+  "240": 0.384,
+  "300": 0.409
+ },
+ "allan_dev_raw_m%": {
+  "1": 0.839,
+  "2": 0.613,
+  "3": 0.519,
+  "5": 0.408,
+  "7": 0.364,
+  "10": 0.352,
+  "15": 0.357,
+  "20": 0.377,
+  "30": 0.444,
+  "45": 0.576,
+  "60": 0.724,
+  "90": 1.008,
+  "120": 1.277,
+  "180": 1.8,
+  "240": 2.337,
+  "300": 2.9
+ },
+ "acf": {
+  "1": 0.34,
+  "2": 0.32,
+  "5": 0.289,
+  "10": 0.281,
+  "20": 0.208,
+  "30": 0.211,
+  "60": 0.125,
+  "120": -0.012
+ },
+ "model": {
+  "white_m%": 0.839,
+  "wander_sigma_m%": 0.67,
+  "wander_tau_s": 79.4,
+  "wander_rel_at_record_level": 0.000727,
+  "fit_rms_log_error": 0.04,
+  "white_only_rms_log_error": 1.145,
+  "fit_taus_s": "1-300"
+ },
+ "archive_10s_check": {
+  "windows": 36,
+  "median_diff_std_m%": 0.949,
+  "model_prediction_m%": 0.87
+ }
+}
