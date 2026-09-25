@@ -6,6 +6,7 @@
 | Date | 2026-09-25 |
 | Repository | `%USERPROFILE%\Documents\Claude Locals\o2-purge` (git; commit identity in §2.4) |
 | Status | Approved behaviour, frozen in simulator tag `sim-v1.0`. Not yet implemented. |
+| Revision | 2026-09-25b: linked PV names are editable fields with defaults (§7.9, §8.21); all Alicat writes go through the SNL, and epid no longer links to the Alicat (§7.8, §8.3, §8.20). Write-enable transitions confirmed both ways and never move the valve; Start feedback without a purge (§8.5). Production versions and `start_ioc` convention recorded (§11). 15IDE deferred. |
 | Audience | An agent with **no prior context**. Read §0–§3 before touching anything. |
 
 This document says **what** the IOC must do, and every name, number and rule it must use. It does
@@ -122,8 +123,13 @@ guides in `docs/simulator/` (user guide, illustrated tour, agent guide) are reco
   4. **The generated `envPaths` contains MSYS paths** (`/home/...`). The native exe needs
      `C:/msys64/home/...`, so rewrite it before running.
   5. **The IOC exe needs the support `bin/windows-x64-mingw` directories on PATH** for the DLLs.
-- **Version gap:** production versions differ (§11.2). Write code compatible with **both**
-  (calc R3-7-5 / R3-8, asyn R4-44-2 / R4-46).
+- **Version gap:** production (§11.2) matches the bench in base, std and seq, but is older in
+  autosave (R5-11 / R6-0), calc (R3-7-5 / R3-8), asyn (R4-44-2 / R4-46) and sscan
+  (R2-11-6 / R2-12). Write code compatible with **both**. Before the production build, rebuild
+  the bench against the production versions of these four (a second support set, or a
+  `RELEASE.local` switch) and rerun the tests, so the production build is not the first time
+  they meet this code. autosave R5-11 is the one that matters: check `manual_save`, array
+  restore at NELM 6000, and restoring the `Cfg:*` strings in pass 0.
 
 ### 2.4 Repository
 
@@ -160,15 +166,15 @@ guides in `docs/simulator/` (user guide, illustrated tour, agent guide) are reco
 ```
                        one IOC process: 15LSS_sample_gas
   +------------------------------------------------------------------------------+
-  |  station 15IDC  ($(P)=15IDC:SampleGas:, MFC=15IDC:Alicat1:, O2=15IDC:D1Dmm_calc)
-  |    database (sampleGas.db) : parameters, commands, status, alarms, helium, epid
+  |  station 15IDC  ($(P)=15IDC:SampleGas:; linked PV names in $(P)Cfg:*, §7.9)
+  |    database (sampleGas.db) : parameters, PV-name fields, commands, status, alarms, helium, epid
   |    SNL program instance    : 1 Hz tick, state machine, monitors, alarms, ledger
   |    C helper library        : slope, lid check, forecast, ledger, report (pure functions)
-  |    autosave                : parameters + helium state
-  |  station 15IDE  (same, other macros; PVs to be supplied)
+  |    autosave                : parameters, PV names + helium state
+  |  station 15IDE  (deferred; same template, names entered in its Cfg:* fields)
   +------------------------------------------------------------------------------+
-        | CA: read O2, Flow_RBV, Setpoint_RBV, ...     | CA put: Setpoint (epid OUTL), RampRate, Run
-        v                                              v
+        | CA: read O2, Flow_RBV, Setpoint_RBV, ...     | CA put (SNL only, gated by writeEnable):
+        v                                              v   Setpoint, RampRate, Run
      analyzer IOC                                 15Alicat IOC (ip-R2-22, Alicat_BC.db)
 ```
 
@@ -177,7 +183,8 @@ guides in `docs/simulator/` (user guide, illustrated tour, agent guide) are reco
   SNL program is compiled reentrant (`+r`).
 - **Division of labour:**
   - **`epid`** does the PID arithmetic, with its own anti-windup and bumpless enable. Its OUTL
-    writes the Alicat setpoint.
+    writes a local soft record, `$(P)PID:Out`; the SNL forwards that value to the Alicat
+    (§8.3). No database link points at the Alicat.
   - **The SNL program** is the controller: tick scheduling, input validation, state machine,
     commands, lid detection, hold monitor, epid configuration and triggering, alarms, settling
     logic, cylinder forecast, helium ledger, logging.
@@ -196,7 +203,7 @@ guides in `docs/simulator/` (user guide, illustrated tour, agent guide) are reco
 | Item | Value |
 |---|---|
 | IOC name (procServ, `start_ioc`) | `15LSS_sample_gas` |
-| Top directory | `lssSampleGas` (production: under `support/ChemMat/`; see §11) |
+| Top directory | `lssSampleGas`, its own EPICS top (production: `support/ChemMat/lssSampleGas/`, decided by the user 2026-09-25; see §11) |
 | App directory | `lssSampleGasApp` |
 | IOC binary and dbd | `lssSampleGas`. It must start with a letter: EPICS uses it as a C identifier. |
 | iocBoot directory | `iocBoot/iocLSS_sample_gas` |
@@ -224,13 +231,18 @@ guides in `docs/simulator/` (user guide, illustrated tour, agent guide) are reco
 
 | Macro | Meaning | 15IDC production | Bench |
 |---|---|---|---|
-| `P` | Controller prefix | `15IDC:SampleGas:` | `SIM:SampleGas:` |
-| `MFC` | Alicat prefix (`$(P)$(R)` of Alicat_BC.db) | `15IDC:Alicat1:` | `SIM:Alicat1:` |
-| `O2` | O2 reading PV (full name) | `15IDC:D1Dmm_calc` | `SIM:O2` |
-| `CYL` | Cylinder-pressure PV, or empty | (empty) | (empty) |
-| `STN` | Station label for messages | `15IDC` | `SIM` |
+| `P` | Controller prefix (fixed for the life of the IOC) | `15IDC:SampleGas:` | `SIM:SampleGas:` |
+| `MFC` | **Default** for `Cfg:MFC`: Alicat prefix (`$(P)$(R)` of Alicat_BC.db) | `15IDC:Alicat1:` | `SIM:Alicat1:` |
+| `O2` | **Default** for `Cfg:O2`: O2 reading PV (full name) | `15IDC:D1Dmm_calc` | `SIM:O2` |
+| `CYL` | **Default** for `Cfg:CYL`: cylinder-pressure PV, or empty | (empty) | (empty) |
+| `STN` | **Default** for `Cfg:STN`: station label for messages | `15IDC` | `SIM` |
 
-15IDE: the macros are to be supplied by the user (open item §16).
+- **`MFC`, `O2`, `CYL` and `STN` are defaults only.** The names actually used live in the editable
+  `$(P)Cfg:*` fields (§7.9), which autosave keeps. An edited, saved name wins over the macro; the
+  `Cfg:RestoreDefaults` command copies the macro values back.
+- **15IDE is deferred.** When it is added, it gets its own `P` (e.g. `15IDE:SampleGas:`); its
+  linked names can be left empty in the macros and entered on the Deep admin screen. A station
+  with an empty `Cfg:MFC` or `Cfg:O2` stays in IDLE and reports "not configured" (§8.21).
 
 ### 5.5 `st.cmd` (sketch; exact form is the implementer's)
 
@@ -240,19 +252,25 @@ dbLoadDatabase("dbd/lssSampleGas.dbd")
 lssSampleGas_registerRecordDeviceDriver(pdbbase)
 < save_restore.cmd                                # autosave paths, pass0/pass1 restore of both .req files
 dbLoadRecords("db/sampleGas.db", "P=15IDC:SampleGas:,MFC=15IDC:Alicat1:,O2=15IDC:D1Dmm_calc,CYL=,STN=15IDC")
-# dbLoadRecords("db/sampleGas.db", "P=15IDE:SampleGas:,MFC=<tbd>,O2=<tbd>,CYL=,STN=15IDE")
 iocInit
 create_monitor_set("sampleGas_settings.req", 30, "P=15IDC:SampleGas:")
 create_monitor_set("sampleGas_helium.req", 300, "P=15IDC:SampleGas:")
-seq sampleGas, "P=15IDC:SampleGas:,MFC=15IDC:Alicat1:,O2=15IDC:D1Dmm_calc,CYL=,STN=15IDC"
+seq sampleGas, "P=15IDC:SampleGas:"
+# 15IDE (deferred): one more dbLoadRecords with P=15IDE:SampleGas: (MFC=,O2= may be empty),
+# its own two create_monitor_set lines, and its own seq line with P=15IDE:SampleGas:
 ```
 
-- **Restore order:** parameters must be restored **before** `iocInit` (pass 0). The SNL program
-  must not act until parameters are valid; see the IOC-start rules in §8.15.
+- **Restore order:** parameters and PV names must be restored **before** `iocInit` (pass 0). The
+  SNL program must not act until parameters are valid; see the IOC-start rules in §8.15.
+- **The SNL gets only `P`.** It reads the linked PV names from `$(P)Cfg:*` at start and connects
+  to them with `pvAssign` (§8.21), so the names are never compiled or hard-wired into `st.cmd`.
 
 ---
 
 ## 6. External interface (PVs owned by other IOCs)
+
+In this section `$(MFC)`, `$(O2)` and `$(CYL)` mean the names **currently applied** from the
+`Cfg:*` fields (§7.9), whose 15IDC defaults are shown.
 
 ### 6.1 Alicat (`$(MFC)` = `15IDC:Alicat1:`)
 
@@ -261,7 +279,7 @@ epics-modules/ip master.
 
 | PV | Type | Controller use | Notes |
 |---|---|---|---|
-| `$(MFC)Setpoint` | ao, stream | **Write** (epid OUTL, and SNL puts) | **`SDIS=$(MFC)Running_RBV`, `DISV=0`:** while the Alicat is on hold, a put changes VAL but the record does not process, so nothing reaches the device. PREC 3. Engineering units SLPM. |
+| `$(MFC)Setpoint` | ao, stream | **Write** (SNL puts only, §8.3) | **`SDIS=$(MFC)Running_RBV`, `DISV=0`:** while the Alicat is on hold, a put changes VAL but the record does not process, so nothing reaches the device. PREC 3. Engineering units SLPM. |
 | `$(MFC)Setpoint_RBV` | ai, soft | Read (monitor) | Device setpoint, from the 1 Hz poll |
 | `$(MFC)Flow_RBV` | ai, soft | Read (monitor) | Measured flow, SLPM, 1 Hz; quantised 0.01 |
 | `$(MFC)Total_RBV` | ai, soft | Read (monitor) | Totalizer, standard litres. **Never reset.** |
@@ -316,6 +334,7 @@ epics-modules/ip master.
 | `$(P)Cmd:Purge` | bo | Start a purge (§8.5) |
 | `$(P)Cmd:FlowZero` | bo | Go to FLOW_ZERO |
 | `$(P)Cmd:ResumePID` | bo | OPEN_LOOP → HANDOFF, if O2 is valid |
+| `$(P)Cmd:StartFeedback` | bo | IDLE → REGULATE without a purge, starting from the valve's current flow (§8.5). **New, not in the simulator.** |
 | `$(P)Cmd:NewCylinder` | bo | New helium cylinder fitted (§8.16) |
 | `$(P)Sts:State` | mbbi | 0 IDLE, 1 PRECHECK, 2 PURGE, 3 HANDOFF, 4 REGULATE, 5 OPEN_LOOP, 6 FLOW_ZERO, 7 OPEN_STOP |
 | `$(P)Sts:StateDesc` | lsi | One-line description of the state (texts from the reference `STATES`) |
@@ -326,6 +345,10 @@ epics-modules/ip master.
 | `$(P)Sts:O2Valid` | bi | The o2ok flag of §8.2 |
 | `$(P)Sts:ExpectedFlow` | ai | SLPM (§8.13) |
 | `$(P)Sts:LastCmd` | ai | Last flow commanded, SLPM (NaN before the first command) |
+| `$(P)Sts:Flow` | ai | Copy of `$(MFC)Flow_RBV` used this tick, SLPM (INVALID when disconnected) |
+| `$(P)Sts:SetpointRBV` | ai | Copy of `$(MFC)Setpoint_RBV`, SLPM |
+| `$(P)Sts:MfcRunning` | bi | Copy of `$(MFC)Running_RBV` (0 = on hold) |
+| `$(P)Sts:MfcStatus` | stringin | Copy of `$(MFC)Status` |
 | `$(P)Sts:Heartbeat` | longin | +1 every tick |
 | `$(P)Sts:Banner` | lsi | Active alarm texts, most severe first, `"; "`-separated, or `No alarms` |
 | `$(P)Sts:WorstSevr` | mbbi | Worst active alarm, 0/1/2 (with severities) |
@@ -403,7 +426,8 @@ itself; it is the client's job (§13.4).
 - **Overrides:** `OverrideCount`, and `OverrideLog` (lsi, last 20 overrides, newest first, one per
   line, `hh:mm:ss  text`)
 - **Log:** `Log:Text` (waveform CHAR, 16384): the event log, newest first, format
-  `YYYY-MM-DD hh:mm:ss  [MINOR|MAJOR]  message`. Keep the last ~200 lines.
+  `YYYY-MM-DD hh:mm:ss  <STN>  [MINOR|MAJOR]  message` (as §8.19; the station label is
+  required, decided by the user 2026-09-25). Keep the last ~200 lines.
 
 The epid record (`$(P)PID`) fields are directly readable.
 
@@ -427,8 +451,33 @@ The epid record (`$(P)PID`) fields are directly readable.
 
 | PV | Type | Settings |
 |---|---|---|
-| `$(P)PID` | epid | `SCAN Passive` (processed by SNL). `INP=$(P)PID:CVAL NPP`. `OUTL=$(MFC)Setpoint PP`. `KD=0`. `FMOD=PID`. `FBON` written by SNL only. `VAL`, `KP`, `KI`, `DRVL`, `DRVH`, `ODEL` written by SNL each PID step (§8.11). `PREC=4`. `EGU=SLPM`. |
+| `$(P)PID` | epid | `SCAN Passive` (processed by SNL). `INP=$(P)PID:CVAL NPP`. `OUTL=$(P)PID:Out NPP` (**local; never an Alicat PV**). `KD=0`. `FMOD=PID`. `FBON` written by SNL only. `VAL`, `KP`, `KI`, `DRVL`, `DRVH`, `ODEL` written by SNL each PID step (§8.11). `PREC=4`. `EGU=SLPM`. |
 | `$(P)PID:CVAL` | ai (soft) | Mean of the last `avgN` valid O2 samples, written by SNL before each PID step |
+| `$(P)PID:Out` | ao (soft, passive, no OUT link) | epid's output. While FBON = 0 the SNL keeps it equal to `lastCmd`, so epid's bumpless start reads the flow actually commanded. The SNL forwards it to `$(MFC)Setpoint` after each PID step (§8.3). |
+
+### 7.9 Linked PV names (`Cfg:`)
+
+The names of the PVs this station reads and writes are editable fields, so they can be changed
+from the Deep admin screen without a rebuild or an `st.cmd` edit.
+
+| PV | Type | Default | Meaning |
+|---|---|---|---|
+| `$(P)Cfg:MFC` | stringout | `$(MFC)` (15IDC: `15IDC:Alicat1:`) | Alicat prefix. All Alicat PVs of §6.1 are this prefix plus the fixed Alicat_BC.db suffixes. |
+| `$(P)Cfg:O2` | stringout | `$(O2)` (15IDC: `15IDC:D1Dmm_calc`) | O2 reading PV, full name |
+| `$(P)Cfg:CYL` | stringout | `$(CYL)` (empty) | Cylinder-pressure PV, full name, or empty (§6.3) |
+| `$(P)Cfg:STN` | stringout | `$(STN)` (15IDC: `15IDC`) | Station label used in log lines |
+| `$(P)Cfg:Apply` | bo | 0 | Apply the edited names (§8.21) |
+| `$(P)Cfg:RestoreDefaults` | bo | 0 | Copy the macro defaults into the four fields. Does **not** apply them. |
+| `$(P)Cfg:Default:MFC`, `:O2`, `:CYL`, `:STN` | stringin | the macros | The macro defaults, read-only, not autosaved |
+| `$(P)Cfg:Active:MFC`, `:O2`, `:CYL`, `:STN` | stringin | – | The names currently in use (written by the SNL) |
+| `$(P)Cfg:Pending` | bi | – | 1 if any field differs from the active name (edited but not applied) |
+| `$(P)Cfg:Conn:MFC`, `:O2`, `:CYL` | bi | – | Channel connected. For MFC: all §6.1 channels connected. CYL is 0 when empty. |
+| `$(P)Cfg:Status` | lsi | – | Last apply result, e.g. `applied 2026-09-25 14:02:11: all connected`, `not configured: Cfg:O2 is empty`, or `rejected: release control first (state REGULATE)` |
+
+- **Field length:** stringout holds 39 characters, which is ample for these names. A name that
+  does not fit cannot be entered; that is acceptable.
+- **Autosave:** the four editable fields are in `sampleGas_settings.req` (§10). `Default:*`,
+  `Active:*` and the status PVs are not saved.
 
 ---
 
@@ -458,8 +507,9 @@ procServ log.
   10. **Publish** all `Sts:`, `Diag:`, `Alm:` and `He:` PVs that changed; increment
       `Sts:Heartbeat`.
 - **Operator commands** (`Cmd:*`) are handled at the start of the next tick, after step 1, in this
-  order: FlowZero, Purge, ResumePID, ReleaseIdle, NewCylinder, MarkNewRun, ResetOverrideCount.
-  Each is reset to 0 after handling. The reference acts on button presses immediately; acting at
+  order: FlowZero, Purge, ResumePID, StartFeedback, ReleaseIdle, NewCylinder, MarkNewRun,
+  ResetOverrideCount,
+  then `Cfg:RestoreDefaults` and `Cfg:Apply` (§8.21). Each is reset to 0 after handling. The reference acts on button presses immediately; acting at
   the next tick is accepted.
 - **Parameter changes** take effect at the next use. A target change also triggers §8.12.
 
@@ -485,8 +535,13 @@ procServ log.
 - `command(v)`: v = max(0, v). If v differs from `lastCmd` by more than 1e-9, set `lastCmd` = v
   and record `lastCmdTime` and the current flow. Then put `$(MFC)Setpoint` = v.
 - **Only when writes are enabled** (§8.20).
-- **While FBON = 1, epid writes the setpoint** through OUTL, and the SNL does not write it (except
-  for the hold-monitor re-send, §8.7). After each PID step the SNL copies `PID.OVAL` into `lastCmd`.
+- **Every write to the Alicat goes through the SNL,** in one gated put function used by
+  `command`, the hold-monitor re-send (§8.7), `RampRate` clamps and `Run`. There is no database
+  link to any Alicat PV, so nothing can write the Alicat by record processing alone.
+- **While FBON = 1,** epid computes the flow into `$(P)PID:Out`. After each PID step the SNL calls
+  `command(PID.OVAL)` (§8.11 step 5), which sets `lastCmd` and puts `$(MFC)Setpoint`.
+- **While FBON = 0,** the SNL writes `$(P)PID:Out` = `lastCmd` whenever `lastCmd` changes, so that
+  epid's bumpless start (FBON 0 → 1) begins from the flow actually commanded.
 
 ### 8.4 States
 
@@ -531,10 +586,22 @@ procServ log.
 | Purge | state ∉ {PRECHECK, PURGE} | enter PRECHECK (`operator pressed Purge`) |
 | FlowZero | always | enter FLOW_ZERO (`operator pressed Flow Zero`) |
 | ResumePID | state = OPEN_LOOP and `o2ok` | enter HANDOFF (`operator pressed Resume PID`) |
+| StartFeedback | state = IDLE, station configured, `o2ok`, and o2 < `lidLevel` | as the restart resume of §8.15: `lastCmd` = `Setpoint_RBV`, `PID:Out` = `lastCmd`, enter REGULATE (`operator pressed Start feedback`), `configEpid`, `FBON` = 1 |
 | ReleaseIdle | always | enter IDLE (`admin released control`) |
 | NewCylinder | always | §8.16 |
 | MarkNewRun | always | ledger event `newrun`; log `admin: start of a new user run marked` |
 
+- **StartFeedback** (NEW; requested by the user 2026-09-25, chiefly for use right after going
+  live, §8.20, but allowed from any IDLE):
+  - **The valve does not move at the switch.** It skips PRECHECK, PURGE and HANDOFF (HANDOFF
+    would command the expected flow, a jump). epid starts bumplessly from the current
+    `Setpoint_RBV` and moves the flow gradually from there.
+  - **Why o2 < `lidLevel`:** above it, the box is effectively unpurged; feedback alone would take
+    hours and pin at maximum flow. A purge is the right action there.
+  - **Rejection texts:** `Start feedback ignored: O2 invalid`, or
+    `Start feedback ignored: O2 <o2:.2f> % above the lid threshold <lidLevel> %: purge first`,
+    or the §8.5 generic `Start feedback ignored in <STATE>`.
+  - In shadow mode it works the same, without writing (shadow regulation for commissioning).
 - **Target change:** log `operator: O2 target → <v> %`. If REGULATE, `startSettling("target
   change")`.
 - **Mode change:** log `operator: enclosure mode → <name>`. No other immediate action.
@@ -663,11 +730,12 @@ in the design spec §4.1 but not in the reference; implement it as an alarm only
 4. **Process** `$(P)PID` (put `PROC`) and wait for completion (put-callback). epid then applies its
    own algorithm:
    - error = VAL − CVAL
-   - bumpless start on FBON 0→1, initialising I from OUTL, which is the current `Setpoint` VAL
+   - bumpless start on FBON 0→1, initialising I from OUTL, i.e. `$(P)PID:Out` = `lastCmd`
    - anti-windup against DRVL/DRVH
    - ODEL
-   - writes OUTL (`$(MFC)Setpoint`) while FBON = 1
-5. **After processing:** `lastCmd` = `PID.OVAL` if FBON = 1.
+   - writes OUTL (`$(P)PID:Out`) while FBON = 1
+5. **After processing:** if FBON = 1, `command(PID.OVAL)` (§8.3). This is the only path by which
+   the PID output reaches the Alicat.
 
 **Reference equivalence.** The reference's `processEpid` reimplements `devEpidSoft`:
 - p = KP·e; ΔI = KP·KI·e·dt
@@ -676,9 +744,9 @@ in the design spec §4.1 but not in the reference; implement it as an alarm only
 - out = clamp(p + I)
 - OVAL updates only if \|out − OVAL\| > ODEL
 
-**Bench-verify** that the real epid matches. In particular, check whether OUTL is written every
-processing even when OVAL is unchanged. If it is not, nothing breaks: the hold monitor re-sends
-explicitly.
+**Bench-verify** that the real epid matches, in particular that its bumpless start reads
+`$(P)PID:Out` through OUTL. Whether epid writes OUTL on every processing does not matter: the SNL
+forwards OVAL itself.
 
 ### 8.12 Settling (`startSettling` and the settling part of `alarmChecks`)
 
@@ -767,7 +835,9 @@ explicitly.
 
 ### 8.15 IOC start (`restart`)
 
-- **At first tick after `iocInit`,** with parameters restored by autosave:
+- **At first tick after `iocInit`,** with parameters and PV names restored by autosave:
+  0. Read `Cfg:*` and connect to those names (§8.21, "At IOC start"). If the station is not
+     configured, enter IDLE (`restart: not configured`) and skip the rest.
   1. Wait until the O2 and Alicat PVs are connected (log the wait), or 30 s have passed; treat
      still-missing PVs as invalid.
   2. valid = O2 severity < INVALID and `o2Min` ≤ o2 ≤ `o2Max`.
@@ -781,7 +851,7 @@ explicitly.
      - else: enter IDLE (`restart: O2 above lid threshold (§4.7)`)
 - **Not restored** (they restart from zero): alarms, debounce state, histories (O2, rate,
   average, OVAL), hold-monitor counters, settling state.
-- **Restored:** all parameters and mode slots, `Mode`, `target`, and the helium state (`CumL`,
+- **Restored:** all parameters and mode slots, the PV-name fields, `Mode`, `target`, and the helium state (`CumL`,
   `LastTotal`, `CylBase`, the usage log, ledger and snapshots), plus `OverrideCount`.
 - **Production note:** procServ runs `--noautorestart`, and cron starts IOCs at boot. A crash means
   a manual restart; the Alicat holds its last setpoint meanwhile.
@@ -873,21 +943,81 @@ explicitly.
 
 - **Use the reference's message texts verbatim** (they are the acceptance-test oracle, §14).
 - **Log line format:** `YYYY-MM-DD hh:mm:ss  <STN>  [MINOR|MAJOR]  <text>`.
+- **Persistent log file:** also append every log line to
+  `logs/sampleGas_<STN>_YYYY-MM.log` in the iocBoot directory (one file per month, flushed per
+  line). `start_ioc` deletes the procServ log at every start (§11.3), and shadow-mode
+  commissioning (§15.2) depends on the event history, so the log must survive IOC restarts.
 
 ### 8.20 Write enable and shadow mode (NEW; not in the simulator; approved by the user 2026-09-25)
 
 - **`Par:writeEnable`** (bo, autosaved). **Default 0 for the first production deployment.**
 - **When 0, shadow mode:** the controller runs every rule, but:
-  - no puts to `Setpoint`, `RampRate` or `Run`
-  - epid `OUTL` is redirected to a local soft record `$(P)Shadow:Setpoint`. Implement this by
-    having the SNL switch `PID.OUTL` between the two links, or by pointing OUTL at
-    `$(P)Out:Setpoint`, a soft ao whose FLNK forwards only when enabled.
-  - log `shadow mode: would write <PV> = <v>` for each suppressed write
+  - no puts to `Setpoint`, `RampRate` or `Run`. The SNL's single gated put function (§8.3)
+    suppresses them; epid never links to the Alicat (§7.8), so there is nothing else to redirect.
+  - log `shadow mode: would write <PV> = <v>` for a suppressed write, but only when `<v>` differs
+    from the last value logged for that PV (HANDOFF and OPEN_LOOP call `command` every tick)
+  - the would-be setpoint is visible as `Sts:LastCmd`
+- **Safe by default:** because the gate is in one function and the database holds no Alicat
+  output link, an IOC that restarts into REGULATE (§8.15) with `writeEnable` = 0 cannot write the
+  Alicat, whatever order things happen in at start.
 - **Purpose:** commission and compare against manual operation without touching the Alicat. This
   honours the no-write rule until the user enables writes.
-- **When 1:** normal operation. A transition 0 → 1 logs `writes enabled` and enters IDLE; the
-  operator then decides (Purge, or leave it).
+- **When 1:** normal operation. A transition 0 → 1 logs
+  `writes enabled: Alicat left at <Setpoint_RBV:.2f> SLPM` and enters IDLE.
+  - **It leaves the valve where it is** (decided by the user 2026-09-25): no put of any kind is
+    made at the switch, and none while in IDLE. In particular, the flow the controller computed
+    while in shadow mode is **not** sent.
+  - The Alicat changes only when the operator next presses Purge, Flow Zero, or Start feedback
+    (§8.5), which starts regulating from the current flow without a purge.
+- **A transition 1 → 0** (decided by the user 2026-09-25) leaves the state unchanged: the
+  controller keeps regulating (or purging, etc.) in shadow mode and only stops writing. Log MAJOR
+  `writes disabled: shadow mode, Alicat holds <Setpoint_RBV:.2f> SLPM`. The Alicat keeps its last
+  setpoint.
+- **Both directions need confirmation** on the screen (§13.2), because either one changes who
+  controls the helium. The automatic 1 → 0 of §8.21 (Alicat PV changed) happens in IDLE and
+  needs none.
 - **The bench runs with writes enabled** (the bench Alicat is simulated).
+
+### 8.21 Linked PV names (NEW; not in the simulator; requested by the user 2026-09-25)
+
+- **At IOC start** (before the first tick's decisions, §8.15):
+  - read `Cfg:MFC`, `Cfg:O2`, `Cfg:CYL`, `Cfg:STN` (autosaved values, or the macro defaults on a
+    fresh IOC)
+  - `pvAssign` every Alicat channel to `<Cfg:MFC><suffix>`, the O2 channel to `Cfg:O2`, and the
+    cylinder channel to `Cfg:CYL` (unassigned if empty)
+  - copy the names to `Cfg:Active:*`; write `Cfg:Status`; log
+    `PV names: MFC <..>, O2 <..>, CYL <.. or none>`
+- **Not configured:** if `Cfg:MFC` or `Cfg:O2` is empty (after trimming spaces), the station is
+  not configured:
+  - it stays in IDLE, runs no state machine and makes no puts
+  - `Cfg:Status` = `not configured: Cfg:<field> is empty`, and `Sts:StateDesc` says the same
+  - `Cmd:Purge`, `Cmd:FlowZero` and `Cmd:ResumePID` are rejected with that text
+  - this is how a deferred station (15IDE) can be loaded before its names are known
+- **`Cmd:Apply` at runtime:**
+  1. **Allowed only in IDLE** (the controller does not own the flow there). Otherwise reject:
+     `Cfg:Status` = `rejected: release control first (state <STATE>)`, log
+     `PV name change ignored in <STATE>`, and leave the active names unchanged.
+  2. Trim spaces. If nothing differs from the active names, log `PV names unchanged` and stop.
+  3. **If `Cfg:MFC` changed and `Par:writeEnable` = 1:** set `Par:writeEnable` = 0 and log MAJOR
+     `Alicat PV changed: writes disabled; re-enable after checking the new MFC`. Pointing the
+     controller at a different Alicat must never carry write permission across.
+  4. `pvAssign` the changed channels to their new names. Reset everything derived from the old
+     channels: O2 history, rate and average buffers, `sameCount`, `aboveCount`, the mismatch
+     tracking and the hold-monitor counters. Clear `O2Bad`, `Mismatch`, `HoldStuck` and `Gas`
+     silently.
+  5. If `Cfg:MFC` changed, re-baseline the ledger so the new totalizer is not counted as usage:
+     `LastTotal` = unset (the next tick takes the new `Total_RBV` as its reference, adding
+     nothing to `CumL`), `CylBase` = unset (first-start rule of §8.16), and clear the usage log
+     (its `used` values belong to the old totalizer). Log MINOR
+     `Alicat PV changed: totalizer re-baselined; press New He cylinder if the cylinder differs`.
+  6. Update `Cfg:Active:*`. After up to 5 s for connection, write `Cfg:Status`
+     (`applied <time>: all connected`, or `applied <time>: not connected: <names>`) and log
+     `operator: PV names → MFC <..>, O2 <..>, CYL <.. or none>`.
+- **Editing a field alone does nothing** until Apply; `Cfg:Pending` shows unapplied edits.
+- **`Cfg:STN`** changes only the log label. It is applied with the others.
+- **Why IDLE only:** retargeting mid-REGULATE would feed epid a different signal or leave an
+  Alicat at an unowned setpoint. The operator releases control, applies, checks the
+  connections, then purges.
 
 ---
 
@@ -988,14 +1118,16 @@ explicitly.
 - **`sampleGas_settings.req`:**
   - all `Par:*` (VAL)
   - all `Mode:*` fields
+  - `Cfg:MFC`, `Cfg:O2`, `Cfg:CYL`, `Cfg:STN` (VAL)
   - `Mode` (VAL) and the `Mode` mbbo state strings
   - `Diag:OverrideCount`
   - saved on change (monitor set, 30 s)
 - **`sampleGas_helium.req`:**
   - `He:CumL`, `He:LastTotal`, `He:CylBase`
   - the arrays `He:HistT/HistUsed/HistN`, `He:EvT/EvType/EvL/EvN`, `He:SnapT/SnapL/SnapN`
-  - saved every 300 s, and also written by the SNL (e.g. through a `Cmd:SaveHelium` trigger or
-    autosave's `manual_save`) right after `NewCylinder` and `MarkNewRun`
+  - saved every 300 s, and also saved immediately after `NewCylinder` and `MarkNewRun`, so a
+    crash cannot lose a cylinder change or a run mark. The SNL does this by calling autosave's
+    `manual_save("sampleGas_helium.req")`; no extra PV is needed.
 - **Restore:** in pass 0, before `iocInit`. Arrays must restore completely; verify that autosave
   handles these sizes on the bench.
 - **Bounded loss:** losing up to 5 min of helium log on a crash is accepted.
@@ -1008,25 +1140,63 @@ explicitly.
 
 - **Linux soft-IOC host,** under a dedicated EPICS service account.
 - **synApps tree:** `$SUPPORT/`, the production synApps `support/` directory (ask the beamline staff for the path).
-- **Custom IOCs** live under `support/ChemMat/iocBoot/iocX/` with a `startX` script, e.g.
-  `iocSensors/startSensors`.
+- **Custom IOCs** live under `support/ChemMat/`, mostly in `iocBoot/iocX/` with a `startX`
+  script (e.g. `iocSensors/startSensors`), some in nested tops of their own. This IOC is its
+  own top at `ChemMat/lssSampleGas/` (§5.1).
 
 ### 11.2 Versions
 
-- **Known:** asyn R4-44-2, calc R3-7-5, StreamDevice 2-8-24, seq (sequencer-mirror) R2-2-9.
-  Base is at `/usr/local/epics/base`, version unknown.
-- **Unknown:** std and autosave. Ask the user for `ls` of the support tree and
-  `CONFIG_BASE_VERSION` before the production build.
+- **Known:** base **7.0.8.1** at `/usr/local/epics/base` (from `CONFIG_BASE_VERSION`, supplied by
+  the user 2026-09-25; the same version as the bench), asyn R4-44-2, calc R3-7-5, StreamDevice
+  2-8-24, seq (sequencer-mirror) R2-2-9.
+- **Host:** `EPICS_HOST_ARCH` = `linux-x86_64`; gcc 11.5.0 (Red Hat 11.5.0-14). Supplied by the
+  user 2026-09-25.
+  - gcc 11 defaults to gnu17, so the bench's C23 trap (§2.3) does not arise there. The reverse
+    matters: code must build on **both** gcc 16 (bench, forced to gnu17) and gcc 11. Write plain
+    C17 with no C23 features (`nullptr`, `constexpr`, `typeof`, bare `bool` without
+    `<stdbool.h>`, `[[attributes]]`).
+- **Modules** (from `<support>/configure/RELEASE`, supplied by the user 2026-09-25):
+  std R3-6-4, autosave R5-11, sscan R2-11-6, busy R1-7-4, iocStats 3-1-16 (all present). The
+  synApps RELEASE has `CHEMMAT` commented out, so the new IOC's own `configure/RELEASE` must
+  name the modules it uses itself.
+- **ChemMat pattern** (from `<support>/ChemMat/configure/RELEASE*`, supplied by the user
+  2026-09-25): ChemMat is one shared EPICS top. Its `configure/RELEASE` sets `SUPPORT` and
+  `EPICS_BASE=/usr/local/epics/base`, lists modules explicitly by version (the same versions as
+  above, including `SNCSEQ`, `STD`, `CALC`, `ASYN`, `AUTOSAVE`, `SSCAN`), and ends with
+  `-include` lines for `RELEASE.local` overrides.
+- **The IOC's own `configure/RELEASE`** copies that pattern but lists **only** the modules it
+  uses: `SNCSEQ`, `STD`, `CALC`, `ASYN`, `AUTOSAVE`, `SSCAN` (plus `DEVIOCSTATS` if iocStats is
+  added), at the versions above. Put the site paths (`SUPPORT`, `EPICS_BASE`) in
+  `configure/RELEASE.local`, which is **not committed**, so the public repo never holds them;
+  commit a `RELEASE.local.example` with placeholders. The bench uses its own `RELEASE.local`
+  that points at `/home/support`.
 
 ### 11.3 `start_ioc` entry to add
 
 ```
-15LSS_sample_gas   20125   1  $SUPPORT/ChemMat/iocBoot/iocLSS_sample_gas/startLSSSampleGas
+15LSS_sample_gas   20125   1  $SUPPORT/ChemMat/lssSampleGas/iocBoot/iocLSS_sample_gas/startLSSSampleGas
 ```
 
-- **procServ template:** `procServ --noautorestart --logstamp -n "15LSS_sample_gas_IOC" -L <log_folder>15LSS_sample_gas.log 20125 <cmd>`.
-- **Log folder:** `$IOC_LOGS/`, the beamline's shared IOC log folder.
-- **Boot:** IOCs start via cron at reboot (`start_ioc -b`).
+How `start_ioc` works (from the script, supplied by the user 2026-09-25):
+
+- **It is one Python script with the IOC table inside it** (`IOCLIST`). Each line is
+  `NAME  PORT  ONBOOT  COMMAND`. ONBOOT 1 means `start_ioc -b` (cron, at boot) starts it.
+  Adding the IOC means adding the line above to that table. The user or beamline staff edits
+  it; the implementer supplies the line.
+- **Port 20125** was the next free port when the table was read (the last entry used 20124).
+  Re-check before adding.
+- **Nested paths under `ChemMat/` are already used** by other IOCs, so its own top at
+  `ChemMat/lssSampleGas/` fits the convention.
+- **It runs** `procServ --noautorestart --logstamp -n "<NAME>_IOC" -L <log_folder><NAME>.log <PORT> <COMMAND>`,
+  with the log folder set in the script (`$IOC_LOGS/` here).
+- **Consequences for the start script `startLSSSampleGas`:**
+  - `start_ioc` does not change directory, so the script must `cd` to its own directory
+    (`cd "$(dirname "$0")"`) before running `../../bin/linux-x86_64/lssSampleGas st.cmd`.
+    Otherwise the relative paths in `st.cmd` and autosave break depending on where
+    `start_ioc` was typed.
+  - It must be executable and start with `#!/bin/bash`.
+- **`start_ioc` deletes the procServ log each time it starts an IOC.** The IOC's own event log
+  must therefore survive restarts by itself (§8.19).
 
 ### 11.4 Existing screens and IOCs
 
@@ -1068,18 +1238,21 @@ Three `.bob` displays, macro `P`, mirroring the simulator's operator column, Adm
 
 ### 13.1 Main panel (`sampleGas_main.bob`)
 
+- **Only macro `P`.** Screens read the Alicat through the `Sts:` mirrors (§7.1), never through
+  `$(MFC)` directly, so they follow a PV-name change without being reopened with new macros.
 - **Banner:** `Sts:Banner`, coloured by `Sts:WorstSevr`.
 - **Four big readouts:**
   - `Sts:O2`, with target ± tol
-  - `$(MFC)Flow_RBV`, with `Sts:ExpectedFlow` and the Alicat hold status
-  - `$(MFC)Setpoint_RBV`, with `Sts:LastCmd`
+  - `Sts:Flow`, with `Sts:ExpectedFlow` and the Alicat hold status (`Sts:MfcRunning`)
+  - `Sts:SetpointRBV`, with `Sts:LastCmd`
   - `He:LeftL`, with `He:ForecastText`
 - **State:** `Sts:State` as a coloured label, `Sts:StateDesc`, the `Sts:InRange` LED, and
   `Sts:Progress`.
 - **Controls:**
   - `Mode` combo; `Par:target` entry
-  - buttons Purge, Flow Zero, Resume PID (enabled only in OPEN_LOOP with `Sts:O2Valid`), and New
-    He cylinder fitted
+  - buttons Purge, Flow Zero, Resume PID (enabled only in OPEN_LOOP with `Sts:O2Valid`), Start
+    feedback (enabled only in IDLE with `Sts:O2Valid` and O2 below `Par:lidLevel`; tooltip "start
+    regulating from the current flow, without a purge"), and New He cylinder fitted
   - Admin (opens the admin display)
 - **Also:** `Sts:LastAction`, and a trend of O2 and flow (log axes, target line).
 - **Shadow mode:** a prominent "SHADOW MODE: no writes" badge when `Sts:WriteEnable` = 0.
@@ -1087,8 +1260,13 @@ Three `.bob` displays, macro `P`, mirroring the simulator's operator column, Adm
 ### 13.2 Admin (`sampleGas_admin.bob`)
 
 - **Parameters:** the A-level parameters, and the per-mode KP, KI, drvh and drvl for A–D.
-- **Controls:** `Par:writeEnable` (with a confirm dialog), Release control, Mark new user run,
-  Reset override count.
+- **Controls:** `Par:writeEnable`, Release control, Mark new user run, Reset override count.
+- **`Par:writeEnable` confirms in both directions,** with a dialog that says what will happen:
+  - to normal: `Enable writes? The Alicat (<Cfg:Active:MFC>) stays at its current flow
+    (<Sts:SetpointRBV> SLPM). The controller goes to IDLE and changes nothing until you press
+    Purge, Flow Zero or Start feedback.`
+  - to shadow: `Switch to shadow mode? The controller keeps running but stops writing; the
+    Alicat stays at its current flow (<Sts:SetpointRBV> SLPM) until someone changes it.`
 - **Displays:** `Diag:OverrideLog`, `He:Rep:Text`, the forecast windows, the epid internals and
   the key `Diag:` values. A button opens Deep admin.
 
@@ -1096,15 +1274,21 @@ Three `.bob` displays, macro `P`, mirroring the simulator's operator column, Adm
 
 - The D-level parameters.
 - Mode names, baseFlow and n.
-- The linked PV names (macros, read-only).
+- **Linked PV names** (§7.9), one row per name:
+  - the editable field (`Cfg:MFC`, `Cfg:O2`, `Cfg:CYL`, `Cfg:STN`)
+  - the active name (`Cfg:Active:*`) and a connection LED (`Cfg:Conn:*`)
+  - the macro default (`Cfg:Default:*`), greyed
+- **Buttons:** Apply PV names (confirm dialog that states the MFC change disables writes; enabled
+  only in IDLE) and Restore defaults. Show `Cfg:Pending` as "unapplied edits" and `Cfg:Status`.
 
 ### 13.4 Alarm server and heartbeat
 
 - **Alarm server config** covering the `Alm:*` PVs, plus a disconnect or stale alarm on
   `Sts:Heartbeat` (stale if unchanged for more than 10 s). This is the only way an IOC crash is
   announced.
-- **Archiving:** archive `Sts:O2`, `Sts:State`, `$(MFC)Flow_RBV`, `$(MFC)Setpoint_RBV` and
-  `Sts:LastCmd` at ≤ 10 s (1 s preferred), and the `Alm:*` on change. Configuring the archiver is
+- **Archiving:** archive `Sts:O2`, `Sts:State`, `Sts:Flow`, `Sts:SetpointRBV` and
+  `Sts:LastCmd` at ≤ 10 s (1 s preferred), the `Alm:*` on change, and `Cfg:Active:*` on change
+  (so the archive records which PVs the traces came from). Configuring the archiver is
   up to the user; provide the PV list.
 
 ---
@@ -1185,6 +1369,28 @@ Three `.bob` displays, macro `P`, mirroring the simulator's operator column, Adm
   parameters and helium state restored, and a stale-heartbeat alarm raised by the client while it
   was down.
 
+### 14.3a PV-name test (§8.21)
+
+- The plant simulator also serves a second O2 PV, `SIM:O2b`, and a second Alicat, `SIM:Alicat2:`.
+- **Expect:**
+  - Apply in REGULATE is rejected and nothing changes.
+  - In IDLE, applying `SIM:O2b` makes `Sts:O2` follow `SIM:O2b`.
+  - Applying `SIM:Alicat2:` with writes enabled sets `writeEnable` = 0, re-baselines the ledger
+    (`CumL` does not jump), and a following purge with writes re-enabled writes only
+    `SIM:Alicat2:`.
+  - Empty `Cfg:O2` gives "not configured"; Purge is rejected.
+  - Restore defaults puts the macro values back; after an IOC restart the edited, applied names
+    are still in use.
+
+### 14.3b Write-enable and Start feedback test (§8.20, §8.5)
+
+- Regulating in shadow at a flow different from the Alicat's: switch to live. **Expect:** IDLE,
+  no put to `SIM:Alicat1:` at the switch or while IDLE.
+- Then Start feedback. **Expect:** REGULATE, and no setpoint change larger than ±0.02 SLPM at the
+  first PID step (bumpless from `Setpoint_RBV`).
+- Start feedback with O2 above `lidLevel`, or invalid, is rejected with the §8.5 texts.
+- Switching live → shadow while regulating keeps REGULATE and stops all puts.
+
 ### 14.4 Algorithm unit tests (golden vectors)
 
 - **Scope:** for each C helper, compare against the reference JavaScript on the same inputs:
@@ -1203,8 +1409,8 @@ Three `.bob` displays, macro `P`, mirroring the simulator's operator column, Adm
 - The IOC builds on the MinGW bench with the traps of §2.3 handled.
 - Unit tests pass. Scenario acceptance passes 17/17 real-time scenarios, and 17 and 19 pass by
   golden vectors.
-- The restart test passes. Shadow mode is verified: no puts reach `SIM:Alicat1:` while
-  `writeEnable` = 0.
+- The restart, PV-name, and write-enable/Start feedback tests pass. Shadow mode is verified: no puts reach
+  `SIM:Alicat1:` while `writeEnable` = 0, including across an IOC restart into REGULATE.
 - Screens render against the bench IOC.
 - The simulator self-test still passes 19/19.
 - All work is committed. A short `ioc/README.md` covers how to build, run the bench and run the
@@ -1215,7 +1421,7 @@ Three `.bob` displays, macro `P`, mirroring the simulator's operator column, Adm
 ## 15. Deployment and commissioning (with the user)
 
 1. **Production build** on the Linux host, after getting the module versions (§11.2). Install it
-   under `ChemMat/iocBoot/iocLSS_sample_gas/`. Add the `start_ioc` line.
+   as its own top at `ChemMat/lssSampleGas/`. Add the `start_ioc` line (§11.3).
 2. **Shadow mode** (`writeEnable` = 0). Run alongside the existing timer script and manual
    operation for at least one user run. Compare what the controller *would* have done:
    - purge handoffs
@@ -1237,14 +1443,15 @@ Three `.bob` displays, macro `P`, mirroring the simulator's operator column, Adm
 
 ## 16. Open items (the implementer must not guess these)
 
-| Item | Owner | Blocking for |
-|---|---|---|
-| 15IDE PV names (MFC prefix, O2 PV) | user | 15IDE station only |
-| Production base, std and autosave versions | user | production build |
-| Real usable litres per helium cylinder (`cylCapacityL`) | user | forecast accuracy |
-| Cylinder-pressure PV | user (future) | nothing (optional) |
-| Lifting the no-write rule on `15IDC:*` | user | §15.3 onwards |
-| Hardware test results (lid check on an open box, ceiling, bump tests) | user + agent | final parameters |
+| Item | Owner | Blocking for | Status |
+|---|---|---|---|
+| 15IDE station | user | 15IDE only | **Deferred.** Not in the first build. When added, its names are entered in its `Cfg:*` fields (§8.21); no code change. |
+| Production module versions | user | production build | **Known** (§11.2), including the ChemMat RELEASE pattern. |
+| Where the IOC sits under `ChemMat/` | user | production install | **Decided:** its own top at `ChemMat/lssSampleGas/`, so building it cannot touch the existing ChemMat IOCs. It starts through the existing `start_ioc` convention, recorded in §11.3. |
+| Real usable litres per helium cylinder (`cylCapacityL`) | user | forecast accuracy | **Later, from data.** Keep the default 8000 L. The ledger measures it: `Total_RBV` used between two `NewCylinder` events, at a cylinder that ran empty (mismatch alarm). Shadow mode collects this without writing. |
+| Cylinder-pressure PV | user (future) | nothing (optional) | Enter in `Cfg:CYL` when it exists. |
+| Lifting the no-write rule on `15IDC:*` | user | §15.3 onwards | **The user lifts it when ready.** Do not ask or assume; until then the production IOC runs with `writeEnable` = 0. |
+| Hardware test results (lid check on an open box, ceiling, bump tests) | user + agent | final parameters | After the no-write rule is lifted. |
 
 ---
 
@@ -1268,6 +1475,9 @@ Three `.bob` displays, macro `P`, mirroring the simulator's operator column, Adm
 | §8.15 IOC start | §4.7 | `restart` |
 | §8.16 cylinder | §5.5 | `newCylinder`, `cylForecast` |
 | §8.17 ledger | §5.6 | `ledgerEvent`, `ledgerUpdate`, `litresAt`, `usageReport` |
+| §8.20 write enable | – (approved 2026-09-25) | none (new) |
+| §8.21 PV names | – (requested 2026-09-25) | none (new) |
+| §8.5 StartFeedback | – (requested 2026-09-25) | none (new); reuses the resume branch of `restart` |
 | §9 parameters | §7.0, §9 | `defaultControllerParams`, `ADMIN_FIELDS`, `DEEP_FIELDS`, mode tables |
 | §14.1 plant | §2.1, §8 | `defaultPlantParams`, `Plant` |
 | §14.2 scenarios | §8 | `SCENARIOS`, `SELFTEST` |
