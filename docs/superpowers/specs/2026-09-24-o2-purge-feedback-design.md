@@ -331,8 +331,20 @@ BASIS manual.**
    - Measured basis: a closed box starting from air has dropped **6.8–7.4 %** by this point (n=2; 2.1.2), so 1.0 % leaves ~7× margin.
      The response of an **open** box to 20 SLPM is unmeasured. The lid-open test (section 8) must confirm it stays below 1 %.
    - The 18 % skip threshold clears every open-lid reading seen (≥ 18.67 %) by at least 0.67 % (2.1.8).
-5. **Early handoff**: when O2 < target − Δ continuously for 15 s, go to HANDOFF.
-   Δ defaults to 0.15 %.
+5. **Early handoff** (REVISED 2026-09-25):
+   - **Rule:** go to HANDOFF when the **lag-corrected** O2 is below target − Δ for `handoffHold`
+     (5 s).
+   - **Correction:** estimate = reading × exp(−k·`purgeLag`), where k is the decay rate measured by
+     the lid check (fallback F/V) and `purgeLag` = 12 s (transport plus sensor lag at 20 SLPM).
+   - **Why:** at 20 SLPM the analyzer reads ~10 % high. The old uncorrected rule (Δ 0.15 %, 15 s
+     hold) handed off with the true O2 at ~0.78 % while the reading said 0.87 %. O2 then dipped to
+     0.76 %, and took 19 min (collimator) to 72 min (normal lid) to return to ±0.02 %.
+   - **Result:** with Δ = 0.01 % (user, 2026-09-25) plus the correction, the dip is ~0.91 %,
+     back in band after 12 min (collimator) and 30 min (normal lid).
+   - **Negative Δ** (hand off *above* target) is allowed, as the user suggested. Δ = −0.10 % with
+     no correction performs about the same at a 1 % target. The correction scales better at other
+     targets because it is proportional.
+   - Δ previously defaulted to 0.15 %.
 6. **Timeout**: at 6.5 min, go to HANDOFF anyway and raise a MINOR "purge incomplete" alarm.
 
 **Measured timing conflict (DERIVED from 2.1.2, needs a decision; section 9).**
@@ -457,6 +469,7 @@ The Alicat holds its last setpoint on its own, so helium keeps flowing if the IO
 | Ramp rate out of range | unaffected (clamped) | MINOR, logged | Automatic |
 | Gas table ≠ He | unaffected | MINOR | Operator, optional |
 | Flow ≥ 1.5× expected | PID | MINOR "flow high, check enclosure" | Automatic |
+| PID pinned at `DRVL` for 10 min with O2 below target − tolerance (enclosure seals better than the selected mode assumes, typically collimator mode chosen with the normal lid fitted) | PID (at minimum) | MINOR "PID at minimum flow, O2 below target: wrong enclosure mode selected?" | Operator selects the correct mode |
 | Flow ≥ 2× expected, or PID pinned at `DRVH` for 10 min | PID | MAJOR "flow too high, check enclosure seal" | Operator |
 | Controller IOC down (crash; procServ runs `--noautorestart`) | Alicat holds its last setpoint | None from this IOC. A heartbeat PV going stale can be watched by the alarm server or the easy-bluesky watchdog. | Operator restarts it via `start_ioc 15LSS_sample_gas`. On restart, the rules in 4.7 apply. |
 | Flow not matching setpoint (see 5.1) | PID continues | MAJOR "flow mismatch: cylinder empty or MFC fault?" | Operator |
@@ -649,7 +662,13 @@ Findings from the first scenario runs, to be decided:
 4. **Open-box drop margin is thin (model assumption).** With the lid open, a 20 SLPM purge drops
    the reading by ~0.65 % in 60 s in the model, against `MinDrop` = 1.0 %. The open-lid purge
    test (§8.3) is essential before trusting the drop check.
-5. **Mode-A recovery after a purge is slow.** After handoff O2 sits ~0.2 % below target. The PID
+6. **The wrong enclosure mode looks like a broken PID.** With collimator mode selected and the
+   normal lid fitted, the PID correctly asks for less flow but is held at mode B's `DRVL`
+   (0.42 SLPM). O2 then drifts down for hours. This is what the user saw in the first simulator,
+   where the fitted lid and the mode were separate selectors. Fixes:
+   - the simulator's fitted lid now follows the mode by default
+   - a new MINOR alarm fires when the PID is pinned at minimum flow with O2 below target (§5)
+5. **Mode-A recovery after a purge is slow.** (Largely fixed by the lag-corrected handoff, 4.2.) After handoff O2 sits ~0.2 % below target. The PID
    holds flow at `DRVL` (0.125 SLPM) and O2 takes about an hour to rise back to target.
    This saves helium, but it is worth knowing.
 

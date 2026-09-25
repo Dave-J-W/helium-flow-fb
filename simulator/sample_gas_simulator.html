@@ -156,6 +156,7 @@
       <div class="row"><button id="wClose">Close lid</button><button id="wLift">Lift lid</button><button id="wCrack">Crack lid (slow leak)</button></div>
       <div class="row"><label>Lid fitted <select id="wLidType"><option value="A">Normal lid</option><option value="B">Collimator lid</option></select></label>
         <button id="wReseat" title="Random seal quality ×/÷1.3, as measured between closures">Re-seat (random seal)</button></div>
+      <div class="row"><label title="When ticked, choosing an enclosure mode on the main panel also fits that lid in the simulated box. Untick to test a wrong mode selection."><input type="checkbox" id="wLink" checked> fitted lid follows the selected mode</label></div>
       <h4>Alicat MFC</h4>
       <div class="row"><button id="wHold">Hold valve (current)</button><button id="wHoldOpen">Hold valve 100 %</button><button id="wHoldStuck">Stuck hold</button><button id="wUnhold">Clear hold</button></div>
       <div class="row"><label>Ramp <input id="wRamp" type="number" step="0.5" min="0" style="width:60px"> SLPM/s</label><button id="wRampSet">Set</button>
@@ -236,7 +237,8 @@ const STATE_KEYS = Object.keys(STATES);
 // =====================================================================================
 function defaultControllerParams() {
   return {
-    target: 0.99, tol: 0.02, delta: 0.15, mode: 'A',
+    target: 0.99, tol: 0.02, delta: 0.01, mode: 'A',          // Δ 0.15 → 0.01 (user, 2026-09-25)
+    purgeLag: 12,          // s, analyzer lag at purge flow (transport ~10 s + sensor zone); handoff uses the lag-corrected O2. 0 = off
     modes: {
       A: { name: 'Normal lid', baseFlow: 0.25, n: 1.0, KP: -9.3, KI: 8.8e-4, drvh: 1.0 },
       B: { name: 'Collimator lid', baseFlow: 0.84, n: 0.53, KP: -10, KI: 1.4e-3, drvh: 2.0 },   // retuned 2026-09-25 (was −4.4 / 8.8e-4)
@@ -246,7 +248,7 @@ function defaultControllerParams() {
     kinT1: 20,             // s after full flow: start of the decay-rate window
     dropCheckTime: 60,     // s after full flow: end of the window, where the lid decision is made
     openSlopeFrac: 0.5,    // lid judged open if the measured decay rate < this fraction of F/V
-    handoffHold: 15, handoffFlowTol: 0.05, fbDelay: 120,
+    handoffHold: 5, handoffFlowTol: 0.05, fbDelay: 120,
     lidLevel: 10, lidFilter: 5, lidSlope: 0.2, lidSlopeWindow: 60, lidArmLevel: 9,
     rampMaxPurge: 5, rampMinHandoff: 2,
     hardCeiling: 2.0, drvlFrac: 0.5, drvlMin: 0.1,
@@ -410,7 +412,7 @@ class Controller {
     this.avgBuf = []; this.blind = false;
     this.lastCmd = null; this.lastCmdTime = 0; this.flowAtCmd = 0;
     this.holdSec = 0; this.holdAttempts = 0; this.nextHoldAttempt = 0; this.holdRecovering = false;
-    this.pinnedSec = 0; this.heartbeat = 0; this.deb = {}; this.settleT0 = this.now;
+    this.pinnedSec = 0; this.pinnedLowSec = 0; this.heartbeat = 0; this.deb = {}; this.settleT0 = this.now;
     this.rbv = this.plant.rbv;
     this.epid = { VAL: this.p.target, CVAL: NaN, KP: 0, KI: 0, KD: 0, DRVL: 0, DRVH: 0, ODEL: this.p.odel,
                   FBON: false, fbonPrev: false, I: 0, P: 0, D: 0, OVAL: 0, ePrev: 0, lastT: null };
@@ -467,8 +469,8 @@ class Controller {
     const prev = this.state, p = this.p;
     this.state = s; this.sd = { t0: this.now };
     if (s !== 'REGULATE') this.epid.FBON = false;
-    for (const k of ['flowHigh', 'pinned', 'o2High', 'openLoop']) { this.clearAlarm(k, true); delete this.deb[k]; }
-    this.pinnedSec = 0;
+    for (const k of ['flowHigh', 'pinned', 'pinnedLow', 'o2High', 'openLoop']) { this.clearAlarm(k, true); delete this.deb[k]; }
+    this.pinnedSec = 0; this.pinnedLowSec = 0;
     if (s === 'REGULATE') this.settleT0 = this.now;
     this.lastAction = `${s}: ${reason}`;
     this.st.log(0, `${prev || '—'} → ${s} (${reason})`);
@@ -591,15 +593,21 @@ class Controller {
       if (sd.o2Start >= p.dropSkipLevel) {
         const kExp = p.purgeFlow / p.V / 60;                                            // 1/s, lid on
         const kObs = (sd.c1 > 0 && this.o2 > 0) ? Math.log(sd.c1 / this.o2) / (p.dropCheckTime - p.kinT1) : 0;
-        const ratio = kObs / kExp; sd.kin = ratio;
+        const ratio = kObs / kExp; sd.kin = ratio; sd.kObs = kObs;
         if (ratio < p.openSlopeFrac) {
           this.stopOpen(`purge decay only ${fmtN(100 * ratio, 0)} % of the lid-on rate: enclosure open?`); return;
         }
         this.st.log(0, `lid check passed: purge decay ${fmtN(100 * ratio, 0)} % of the lid-on rate (open below ${fmtN(100 * p.openSlopeFrac, 0)} %)`);
       } else { sd.kin = 'skipped'; this.st.log(0, `lid check skipped: purge started at ${fmtN(sd.o2Start)} % (< ${p.dropSkipLevel} %)`); }
     }
-    if (this.o2 < p.target - p.delta) sd.below++; else sd.below = 0;
-    if (sd.below >= p.handoffHold) { this.enter('HANDOFF', `O2 < target − Δ for ${p.handoffHold} s`); return; }
+    // Lag-compensated handoff: the reading trails the bulk by ~purgeLag s while O2 falls at rate k,
+    // so the bulk is ≈ reading × exp(−k·lag). k is the decay rate measured by the lid check (else F/V).
+    const k = (sd.kObs > 0 ? sd.kObs : p.purgeFlow / p.V / 60);
+    sd.est = this.o2 * Math.exp(-k * p.purgeLag);
+    if (sd.est < p.target - p.delta) sd.below++; else sd.below = 0;
+    if (sd.below >= p.handoffHold) {
+      this.enter('HANDOFF', `lag-corrected O2 ${fmtN(sd.est, 3)} % < target − Δ for ${p.handoffHold} s (reading ${fmtN(this.o2, 3)} %)`); return;
+    }
     if (el >= p.purgeTimeout) {
       this.latch('purgeInc', 1, 'purge incomplete: timeout reached before target − Δ');
       this.enter('HANDOFF', 'purge timeout');
@@ -635,6 +643,11 @@ class Controller {
       if (this.epid.OVAL >= this.epid.DRVH - 1e-6) this.pinnedSec++; else this.pinnedSec = 0;
       if (settled && this.pinnedSec >= p.pinnedTime) this.setAlarm('pinned', 2, 'PID pinned at max flow: check enclosure seal');
       else this.clearAlarm('pinned');
+      // Pinned at minimum flow while O2 stays below target: the enclosure seals better than the selected
+      // mode assumes (typically the wrong mode, e.g. collimator mode with the normal lid fitted).
+      if (this.epid.OVAL <= this.epid.DRVL + 1e-6 && this.o2ok && this.o2 < p.target - p.tol) this.pinnedLowSec++; else this.pinnedLowSec = 0;
+      if (settled && this.pinnedLowSec >= p.pinnedTime) this.setAlarm('pinnedLow', 1, 'PID at minimum flow, O2 below target: wrong enclosure mode selected?');
+      else this.clearAlarm('pinnedLow');
       if (this.o2ok) this.debounce('o2High', !settled ? 0 : this.o2 > p.target + p.o2AbnormalOffset ? 2 : this.o2 > p.target + p.tol ? 1 : 0,
         'O2 above target range', 'O2 abnormally high');
     }
@@ -703,6 +716,7 @@ class Station {
     this.ctl = new Controller(this);
     this.hist = this.newHist();
     this.scenario = null;
+    this.lidLinked = true;
   }
   get t() { return this.steps * DT; }
   newHist() { return { t: [], o2: [], bulk: [], flow: [], cmd: [], sp: [], cyl: [], state: [], drvh: [] }; }
@@ -744,11 +758,12 @@ class Station {
     for (let i = LOG.length - 1; i >= 0; i--) if (LOG[i].st === this.name) LOG.splice(i, 1);
     logVersion++;
     this.steps = 0; this.plant.reset(); this.ctl.reinit(); this.ctl.enter('IDLE', 'station reset');
+    if (this.lidLinked) this.plant.lidType = this.ctl.p.mode;   // box keeps the lid that matches the selected mode
     this.hist = this.newHist(); this.scenario = null;
   }
   startScenario(sc) {
     this.resetAll();
-    this.ctl.p.target = 0.99; this.ctl.p.mode = 'A';   // scenarios start from the default target and mode; other settings are kept
+    this.ctl.p.target = 0.99; this.ctl.p.mode = 'A'; this.plant.lidType = 'A';   // scenarios start from defaults; setup overrides
     this.log(0, `scenario: ${sc.name}`);
     if (sc.setup) sc.setup(this);
     this.scenario = { sc, i: 0, t0: Math.round(this.t) };
@@ -962,7 +977,7 @@ function drawChart(cv, cfg) {
 const F = (k, l, u, min, max, step, int) => ({ k, l, u, min, max, step, int });
 const ADMIN_FIELDS = [
   F('tol', 'O2 in-range tolerance (display only, not a deadband)', '%', 0.005, 0.5, 0.005),
-  F('delta', 'Purge handoff margin Δ below target', '%', 0, 1, 0.01),
+  F('delta', 'Purge handoff margin Δ below target (negative = above target)', '%', -1, 1, 0.01),
   F('purgeFlow', 'Purge flow', 'SLPM', 1, 20, 0.5),
   F('purgeTimeout', 'Purge timeout', 's', 60, 1800, 10, true),
   F('dropCheckTime', 'Lid check: decision time after full flow', 's', 20, 300, 5, true),
@@ -983,7 +998,8 @@ const DEEP_FIELDS = [
   F('kinT1', 'Lid check: decay-rate window starts after full flow', 's', 5, 120, 1, true),
   F('openSlopeFrac', 'Lid check: open if decay < this fraction of F/V', '', 0.05, 0.95, 0.05),
   F('dropSkipLevel', 'Lid check skipped if purge starts below', '%', 1, 21, 0.1),
-  F('handoffHold', 'Handoff: O2 below target−Δ for', 's', 1, 120, 1, true),
+  F('handoffHold', 'Handoff: lag-corrected O2 below target−Δ for', 's', 1, 120, 1, true),
+  F('purgeLag', 'Handoff: analyzer lag at purge flow (0 = no compensation)', 's', 0, 60, 1, true),
   F('handoffFlowTol', 'Handoff: flow-settled tolerance', 'SLPM', 0.01, 1, 0.01),
   F('lidLevel', 'Lid detector: O2 level', '%', 2, 19, 0.5),
   F('lidFilter', 'Lid detector: above level for', 's', 1, 60, 1, true),
@@ -1121,6 +1137,7 @@ function onStationChange() {
   $('pvPrefix').textContent = st.prefix;
   $('selMode').innerHTML = Object.keys(st.ctl.p.modes).map(m => `<option value="${m}">${m}: ${st.ctl.p.modes[m].name}</option>`).join('');
   $('wLidType').value = st.plant.lidType;
+  $('wLink').checked = st.lidLinked;
   $('wRamp').value = st.plant.a.ramp;
   $('wGas').value = st.plant.a.gas;
   $('wCylPv').checked = st.plant.cylPresent;
@@ -1146,7 +1163,15 @@ function wire() {
   $('btnAdmin').onclick = () => openModal('admin');
   $('modalClose').onclick = closeModal;
   $('modal').addEventListener('click', e => { if (e.target.id === 'modal') closeModal(); });
-  $('selMode').onchange = () => { const st = S(); st.ctl.p.mode = $('selMode').value; st.log(0, `operator: enclosure mode → ${st.ctl.p.modes[st.ctl.p.mode].name}`); };
+  $('selMode').onchange = () => {
+    const st = S(); st.ctl.p.mode = $('selMode').value;
+    st.log(0, `operator: enclosure mode → ${st.ctl.p.modes[st.ctl.p.mode].name}`);
+    if (st.lidLinked && st.plant.lidType !== st.ctl.p.mode) {
+      st.plant.lidType = st.ctl.p.mode; $('wLidType').value = st.plant.lidType;
+      st.world(`lid fitted to match mode: ${st.plant.lidType === 'A' ? 'normal' : 'collimator'}`);
+    }
+  };
+  $('wLink').onchange = () => { const st = S(); st.lidLinked = $('wLink').checked; st.world(st.lidLinked ? 'fitted lid follows the selected mode' : 'fitted lid independent of mode (mismatch testing)'); };
   $('inTarget').onchange = () => {
     const st = S(); const v = parseFloat($('inTarget').value);
     if (!isFinite(v) || v < 0.2 || v > 5) { $('inTarget').value = st.ctl.p.target; return; }
@@ -1161,7 +1186,14 @@ function wire() {
   $('wLift').onclick = w(s => s.plant.liftLid(), 'lid lifted');
   $('wCrack').onclick = w(s => s.plant.crackLid(), 'lid cracked (slow leak)');
   $('wReseat').onclick = () => { const st = S(); st.plant.reseat(); st.world(`lid re-seated, seal factor ${fmtN(st.plant.seal)}`); };
-  $('wLidType').onchange = () => { const st = S(); st.plant.lidType = $('wLidType').value; st.world(`lid fitted: ${st.plant.lidType === 'A' ? 'normal' : 'collimator'}`); };
+  $('wLidType').onchange = () => {
+    const st = S(); st.plant.lidType = $('wLidType').value;
+    st.world(`lid fitted: ${st.plant.lidType === 'A' ? 'normal' : 'collimator'}`);
+    if (st.lidLinked && st.plant.lidType !== st.ctl.p.mode) {
+      st.lidLinked = false; $('wLink').checked = false;
+      st.world('lid no longer follows the mode (deliberate mismatch)');
+    }
+  };
   $('wHold').onclick = w(s => s.plant.hold('current'), 'Alicat hold, valve at current opening');
   $('wHoldOpen').onclick = w(s => s.plant.hold('open'), 'Alicat hold, valve 100 %');
   $('wHoldStuck').onclick = w(s => s.plant.hold('stuck'), 'Alicat stuck on hold (ignores Run)');
@@ -1229,7 +1261,7 @@ function render() {
   if (sk === 'PURGE') {
     const sd = c.sd;
     pr = `purge ${fmtT(sd.elapsed)} / ${fmtT(p.purgeTimeout)}${sd.timerT0 == null ? ' (waiting for full flow)' : ''}` +
-         (c.blind ? '  BLIND (timer only)' : `  start ${fmtN(sd.o2Start)} %  lid check: ${sd.kin == null ? 'pending' : sd.kin === 'skipped' ? 'skipped' : 'decay ' + fmtN(100 * sd.kin, 0) + ' % of lid-on'}  handoff at < ${fmtN(p.target - p.delta)} %`);
+         (c.blind ? '  BLIND (timer only)' : `  start ${fmtN(sd.o2Start)} %  lid check: ${sd.kin == null ? 'pending' : sd.kin === 'skipped' ? 'skipped' : 'decay ' + fmtN(100 * sd.kin, 0) + ' % of lid-on'}  lag-corrected ${fmtN(sd.est, 3)} %, handoff at < ${fmtN(p.target - p.delta, 3)} %`);
   } else if (sk === 'HANDOFF') {
     pr = c.sd.phase === 'settle' ? 'waiting for flow to settle at expected' : `feedback on in ${fmtT(p.fbDelay - (c.now - c.sd.t1))}`;
   } else if (sk === 'REGULATE') {
@@ -1251,7 +1283,9 @@ function render() {
     `Alicat     ${a.running ? 'running' : (a.stuck ? 'HLD (stuck)' : 'HLD')}  dev.setpoint ${fmtN(a.spDev)}  record VAL ${fmtN(a.spVal)}\n` +
     `           flow ${fmtN(a.flow, 3)}  ramp ${a.ramp} SLPM/s  gas ${a.gas}\n` +
     `cylinder   ${fmtN(pl.cylP, 0)} psi, max delivery ${fmtN(pl.cylCapacity(), 1)} SLPM\n` +
-    `analyzer   ${pl.an.mode}${pl.an.sevr >= 3 ? ' (INVALID)' : ''}`;
+    `analyzer   ${pl.an.mode}${pl.an.sevr >= 3 ? ' (INVALID)' : ''}` +
+    (pl.lidType !== p.mode ? `\n⚠ MISMATCH: ${pl.lidType === 'A' ? 'normal' : 'collimator'} lid fitted, mode ${p.mode} selected` : '');
+  if ($('wLidType') !== document.activeElement) $('wLidType').value = pl.lidType;
   // charts
   const win = +$('win').value;
   const t1 = Math.max(st.t, 60), t0 = win ? t1 - win : (st.hist.t[0] || 0);
