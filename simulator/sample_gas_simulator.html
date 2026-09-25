@@ -80,6 +80,20 @@
   table.mt input { width:90px; }
   .internals { font-family:Consolas,monospace; font-size:11.5px; background:#fff; border:1px solid #bbb; padding:6px; white-space:pre; }
   .note { font-size:11.5px; color:#444; background:#f4f4f4; border-left:3px solid #999; padding:4px 8px; margin:6px 0; }
+  .helpBtn { background:#f5d76e; font-weight:600; }
+  .helpBox { width:min(1100px, 96vw); }
+  .helpTabs { display:flex; gap:4px; }
+  .helpTabs button { background:#46546a; color:#fff; border:1px solid #6b7a91; padding:3px 10px; cursor:pointer; }
+  .helpTabs button.active { background:#f0f0f0; color:#111; }
+  .md { padding:10px 18px; line-height:1.45; font-size:13.5px; background:#fff; }
+  .md h1 { font-size:20px; border-bottom:2px solid #3c4a5e; } .md h2 { font-size:16.5px; border-bottom:1px solid #aaa; margin-top:22px; }
+  .md h3 { font-size:14.5px; margin-top:16px; } .md h4 { font-size:13.5px; }
+  .md code { background:#f0f0f0; padding:0 3px; font-family:Consolas,monospace; font-size:12.5px; }
+  .md pre { background:#f6f6f6; border:1px solid #ddd; padding:6px 8px; overflow:auto; font-size:12px; }
+  .md pre code { background:none; padding:0; }
+  .md table { border-collapse:collapse; margin:6px 0; } .md td, .md th { border:1px solid #bbb; padding:3px 7px; vertical-align:top; font-size:12.5px; }
+  .md th { background:#e9eef5; } .md li { margin:2px 0; }
+  .st-pass { color:#1c7c1c; font-weight:600; } .st-fail { color:#c00000; font-weight:600; }
 </style>
 </head>
 <body>
@@ -95,6 +109,7 @@
       <option value="300">300×</option><option value="1000">1000×</option><option value="3000">3000×</option>
     </select></label>
     <span id="clock">0:00:00</span>
+    <button id="btnHelp" class="helpBtn">? Help</button>
   </div>
 </header>
 
@@ -194,6 +209,582 @@
   <div id="modalBody"></div>
 </div></div>
 
+<div id="help" class="modal hidden"><div class="modalBox helpBox">
+  <div class="modalHead"><span>Help</span>
+    <span class="helpTabs"><button data-tab="user" class="active">User guide</button><button data-tab="agent">Guide for building a similar simulator</button><button data-tab="selftest">Self-test</button></span>
+    <button id="helpClose">×</button></div>
+  <div id="helpBody" class="md"></div>
+</div></div>
+
+<!-- The help texts below are generated from docs/simulator/*.md by tools/embed_help.py. Edit the .md files, not these blocks. -->
+<!--HELP:user:BEGIN-->
+<script type="text/markdown" id="md-user">
+# Sample-gas controller simulator: user guide
+
+`simulator/sample_gas_simulator.html`. It is a single file: open it in any browser (Edge, Chrome,
+Firefox) with nothing to install. Hover over almost anything to see a tooltip. **? Help** (top
+right) shows this guide, the guide for building a similar simulator, and the self-test.
+
+## What it is, and what it is not
+
+- **It is** an executable version of the design spec
+  (`docs/superpowers/specs/2026-09-24-o2-purge-feedback-design.md`). The helium purge and O2
+  feedback controller for the `15LSS_sample_gas` IOC runs against a model of the real enclosure,
+  O2 analyzer, Alicat MFC and helium cylinder.
+- **Its purpose** is to let you try the design before any EPICS code exists: press buttons, break
+  things, and watch what the controller does.
+- **It is not** the IOC. The real controller will be an `epid` record plus an SNL state machine.
+  Anything you change here should go back into the spec, and the simulator's scenarios become the
+  tests the real IOC must pass.
+- **The physics comes from your data** (spec §2.1):
+  - enclosure volume 41 L
+  - leak rates per lid, and ~80 s dead time at hold flow
+  - lid-lift kinetics
+  - the Alicat's ramp and hold behaviour
+  - the 1 Hz analyzer noise (white 0.84 m% plus a slow 0.67 m% component that is not bulk O2)
+
+## Quick start
+
+1. Open the file. Station **15IDC** is selected; it starts IDLE, lid on, box full of air.
+2. Press **Purge**. Watch the O2 graph fall on the log axis, and the flow jump to 20 SLPM.
+3. Set **Speed** to 300× or 1000× to see the handoff to the PID and the regulation at 0.99 %.
+4. In the right-hand column, press **Lift lid**. Within ~10 s the controller stops the flow
+   (state OPEN_STOP, red banner).
+5. Press **Close lid**, then **Purge** again.
+
+To try a prepared case, pick a **Scenario** at the bottom right and press **Reset station & run
+scenario**. Each scenario's description says what to watch for.
+
+## Screen layout
+
+| Area | What it is |
+|---|---|
+| **Header** | Station tabs (15IDC, 15IDE; the dot shows the worst alarm), Pause/Run, +10 s, Speed, simulated clock, **? Help** |
+| **Left column: main panel** | What the operator's Phoebus main panel will show: alarm banner, the four big readouts, state, controls, buttons, Admin |
+| **Centre: graphs** | O2, helium flow, helium left in the cylinder, and a strip showing the controller state over time |
+| **Right column: physical world** | Simulator only. Change the lid, the Alicat, the cylinder, the analyzer, crash the IOC, run scenarios, edit the plant physics |
+| **Bottom: event log** | Everything that happened, newest first. MINOR alarms are yellow, MAJOR red, world actions in italics |
+
+## The main panel (what operators will see)
+
+### Readouts
+
+- **Oxygen:** the analyzer reading (`15IDC:D1Dmm_calc`), updated every second. It shows
+  "INVALID" if the analyzer reports an invalid value. Below it: target ± tolerance.
+- **Helium flow:** measured by the Alicat (`Flow_RBV`), with the expected flow for the selected
+  mode. "MFC STATUS: HLD" means the Alicat is on hold.
+- **Flow setpoint:** the Alicat's setpoint readback (`Setpoint_RBV`) and the value the controller
+  last commanded ("(PID)" when feedback is on).
+- **Helium cylinder:** litres left, counted from the Alicat's totalizer since the last "New He
+  cylinder fitted". Below it: the run-out forecast range. Once a cylinder-pressure PV exists, the
+  pressure is shown too.
+
+### State, progress and controls
+
+- **State** badge and a one-line description (see *States* below).
+- **In range** light: green when O2 is within target ± tolerance.
+- **Progress line:**
+  - *purge:* elapsed / timeout, lid-check result, the lag-corrected O2 and the handoff level
+  - *handoff:* waiting for the flow to settle
+  - *regulation:* "SETTLING ↓/↑" while moving to a new target, and the PID internals
+- **Enclosure mode:** A = normal lid, B = collimator lid. It sets the expected flow, gains and
+  flow limits.
+- **O2 target** (0.2–5 %).
+- **Buttons:**
+  - **Purge:** start a purge.
+  - **Flow Zero:** stop the helium; use it before opening the enclosure.
+  - **Resume PID:** only enabled in OPEN_LOOP, once the O2 reading is valid again.
+  - **New He cylinder fitted:** press after changing the cylinder.
+  - **Admin settings…**
+- **Last action:** why the controller did the last thing it did.
+
+## States
+
+| State | Flow | Meaning |
+|---|---|---|
+| IDLE | not touched | The controller is not managing the flow |
+| PRECHECK | not touched | Checks and fixes the Alicat before a purge: resumes it from hold, clamps a bad ramp rate, warns about the gas table |
+| PURGE | 20 SLPM | Purging; the lid check runs ~25 s after full flow |
+| HANDOFF | expected flow for the mode | Stepping down, then feedback on |
+| REGULATE | PID | Holding O2 at the target |
+| OPEN_LOOP | expected flow, fixed | The O2 reading was lost (invalid or frozen); no feedback possible |
+| FLOW_ZERO | 0 | The operator pressed Flow Zero |
+| OPEN_STOP | 0 | The enclosure is confirmed open: helium stopped to save it |
+| IOC DOWN | Alicat holds its last value | The controller IOC is not running |
+
+## How the controller behaves (defaults)
+
+### Purge
+
+- 20 SLPM.
+- **Lid check:** waits for the O2 decay to start (a 2 % drop). It then judges 15 s of decay.
+  - **Lid open** if the decay rate is below half the lid-on rate (flow ÷ volume), or if the decay
+    levels off (curvature below 0.8).
+  - If no decay starts within 30 s, the lid is also open.
+  - The check is skipped if the purge starts below 18 % O2, which proves the lid was on.
+- **Handoff:** when the **lag-corrected** O2 has been below target − Δ for 5 s.
+  - Δ = −0.04 %, i.e. hand off slightly *above* target.
+  - The correction removes the analyzer's ~12 s lag at full flow, during which it reads ~10 %
+    high.
+- **Timeout:** 1.3 × the purge time the kinetics predict for this target, recomputed from the
+  measured decay (120–1800 s). If it runs out, the controller hands off anyway and raises
+  "purge incomplete".
+
+### Regulation
+
+- `epid` every 10 s on a 10-sample O2 mean.
+- **Gains per lid**, stated at 0.99 % and scaled by 0.99/target (gain scheduling):
+  - normal lid: KP −9.3, KI 0.00088
+  - collimator lid: KP −10, KI 0.0014
+- **Near target** (within 0.01 % absolute), KP is halved. This cuts MFC moves about 4× at almost
+  no cost to regulation.
+- **Flow limits per lid:** normal 0.05–1.0 SLPM, collimator 0.3–2.0 SLPM. The hard ceiling is
+  2.0 SLPM (surface vibration).
+
+### Protection
+
+- **Lid lifted while regulating:** O2 > 10 % for 5 s **and** a rise of ≥ 0.2 %/s → OPEN_STOP.
+  A slow creep (cracked lid, flow off for hours) does not trip it.
+- **Alicat on hold** (in any state where the controller owns the flow):
+  - it writes Run and re-sends the setpoint
+  - after 3 failed tries it raises MAJOR "cannot resume" and keeps retrying every 60 s
+- **O2 reading frozen (30 s) or invalid:** switches to OPEN_LOOP at the expected flow.
+- **IOC restart:** resumes regulation if O2 is valid, below 10 % and the setpoint is above 0.
+
+## Alarms
+
+MINOR is yellow, MAJOR red; the banner lists them most severe first.
+
+| Alarm | When |
+|---|---|
+| enclosure open? / enclosure opened, flow stopped | Lid check at purge start, or a lid lift while regulating (MAJOR; flow to 0) |
+| purge incomplete | Purge timeout reached before target − Δ (MINOR) |
+| O2 reading invalid / frozen; running blind | Analyzer problems (MAJOR) |
+| MFC was on hold, resumed / cannot resume | Hold monitor (MINOR / MAJOR) |
+| flow mismatch: cylinder empty or MFC fault? | Measured flow ≠ `Setpoint_RBV` after the ramp time (MAJOR) |
+| flow ≥ 1.5× / 2× expected: check enclosure (seal) | Steady flow well above what the lid needs (MINOR / MAJOR) |
+| flow ≤ 0.5× expected: wrong enclosure mode selected? | Steady PID demand well below it (MINOR) |
+| PID pinned at max flow | At the flow ceiling for 10 min (MAJOR) |
+| O2 above target range / abnormally high | Above target + tolerance, or + 0.3 % (MINOR / MAJOR) |
+| target not reached within 2:00:00 | Still settling after 2 h (MINOR) |
+| helium cylinder empty in < 24 h / < 6 h | Run-out forecast (MINOR / MAJOR) |
+| ramp rate / gas table overrides | Automatic corrections at purge start and handoff (MINOR, logged) |
+
+### Why target changes don't raise false alarms
+
+- After feedback turns on or the target changes, the loop is **settling**. The flow, PID-pinned
+  and O2-range alarms stay quiet as long as O2 keeps moving toward the target. The slope is
+  measured over 2 min with 20-sample means, and judged after a 5 min grace.
+- **If it stalls, or 2 h pass,** the alarms apply at once.
+- **Once O2 reaches the target,** settling ends, and any later excursion is a real disturbance.
+- **Flow alarms also need a steady process** (steady flow and steady O2), and flow/O2-range
+  alarms must persist 5 min.
+
+## Admin and Deep admin
+
+**Admin settings…** (beamline staff):
+- tolerance, Δ, purge flow and timeout margin, feedback delay
+- flow and O2 alarm thresholds, settle timeout, cylinder alarm levels
+- PID gains and flow limits per lid
+- the override log
+- the **helium usage report**, with **Mark start of new user run**
+- live internals: the epid fields, lid detector, hold monitor, settling state and cylinder
+  forecast per window
+
+**Deep admin settings…** (instrument scientist): every physical and threshold number the
+controller uses, including:
+- lid check, lid detector, ramp clamps, flow mismatch, hold monitor
+- O2 validity, averaging, epid scan and deadband
+- gain scheduling and the near-target fine band
+- slope and settling logic, cylinder capacity, report window, run gap
+- the linked PV names, read-only
+
+Every field has limits; out-of-range entries are clamped (the field flashes red). Changes apply
+immediately and are logged. In the real IOC these are autosaved records.
+
+## The physical world (right column; simulator only)
+
+- **Enclosure lid:**
+  - Close / Lift / Crack (slow leak)
+  - which lid is fitted
+  - Re-seat: random seal quality ×/÷1.3, as measured between real closures
+  - **Fitted lid follows the selected mode** (ticked by default). Untick it to test a wrong-mode
+    selection.
+- **Alicat MFC:**
+  - hold at the current valve opening, hold at 100 % (as seen in the 2026-06-18 trace), stuck
+    hold, clear hold
+  - ramp rate (0 = instant)
+  - gas table
+- **Helium cylinder:** refill, nearly empty, empty; simulate a pressure PV.
+- **O2 analyzer:** normal, frozen value, INVALID; a breath dip (ambient −0.6 % for 1 min).
+- **Controller IOC:** crash, restart.
+- **Scenarios:** see below.
+- **Plant model parameters:** the physics. The controller never sees these.
+
+## Scenarios
+
+Each scenario resets its station first, then sets the target to 0.99 % and mode A unless the
+scenario says otherwise. Your other settings are kept.
+
+| # | Scenario | What to watch |
+|---|---|---|
+| 1 | Normal purge from air, normal lid | Lid check passes; handoff; regulation |
+| 2 | Purge with the lid left open | OPEN_STOP at the lid check (~25 s) |
+| 3 | Lid lifted during regulation | OPEN_STOP ~10 s after the lift |
+| 4 | Flow Zero, lid kept on 22 min, then Purge | No false trip; lid check skipped (O2 < 18 %) |
+| 5 | Flow Zero, lift 76 s later, 2 min open, re-purge | The measured 24 Sep sequence |
+| 6 | Collimator lid fitted, mode A selected | Flow ≥ 2× expected once settled |
+| 7 | Cylinder runs dry during regulation | Flow mismatch; O2 creeps past 10 % without tripping OPEN_STOP |
+| 8 | MFC on hold, valve 100 % | Automatic Run and setpoint re-send |
+| 9 | MFC stuck on hold | "Cannot resume" after 3 tries |
+| 10 | Analyzer freezes, recovers, operator resumes | OPEN_LOOP, then Resume PID |
+| 11 | Analyzer INVALID at purge start | Blind purge on the timer, then OPEN_LOOP |
+| 12 | Bad ramp-rate settings | Two automatic overrides |
+| 13 | Cylinder nearly empty at purge | Flow mismatch |
+| 14 | IOC crash and restart | Heartbeat alarm; bumpless resume |
+| 15 | Cracked lid during regulation | PID pinned, O2 high; no OPEN_STOP |
+| 16 | Target change 0.99 → 0.50 % | Settling without false alarms |
+| 17 | Cylinder run-out forecast (4 days) | Forecast range narrowing; run at 3000× |
+| 18 | Collimator lid, mode B, purge | Regulation at ~0.84 SLPM |
+| 19 | Helium ledger: three users, a 48 h downtime | Admin → usage report: 3 runs |
+
+## Helium accounting
+
+- **Litres left:** cylinder capacity (default 8000 L usable) minus the litres the Alicat
+  totalizer has counted since **New He cylinder fitted**. No pressure PV is needed.
+- **Run-out forecast:**
+  - The usage rate is fitted over the last 3, 2, 1, 0.5 and 0.25 days; each window gives a
+    run-out time.
+  - The spread is shown as a range, e.g. "empty in 5.5–5.6 d (median 5.5 d, 5 windows)".
+  - The median drives the < 24 h / < 6 h alarms.
+  - It needs about 6 h of data before the first estimate.
+- **Usage report** (Admin), covering the 60 days ending at the end of the latest **user run**:
+  - helium dispensed, litres during runs, cylinders fitted, cylinder-equivalents used, and a
+    table of runs
+  - **A user run** is a series of purges. It ends at the first Flow Zero after its last purge,
+    and closes after 60 h with no purge. That survives the 24 h and 48 h beam downtimes, plus up
+    to 10 h before the user's next purge.
+  - **Mark start of new user run** splits runs at a user changeover.
+
+## Two stations
+
+15IDC and 15IDE are independent controllers, as they will be in the one real IOC. Both run all
+the time; the tab chooses which one you see. Each has its own settings, scenario, history and
+log. Tick **show both stations** in the log to see both.
+
+## Time and graphs
+
+- **Speed:** 1× to 3000× simulated seconds per real second. **Pause** freezes both stations;
+  **+10 s** steps.
+- **Mode A settles slowly** (the box's time constant at 0.25 SLPM is ~2.7 h); use 1000× or
+  3000× for long cases.
+- **Window:** 10 min to 12 h, or all. The O2 and flow axes can be logarithmic.
+- **True bulk O2** (grey dashed) is what only the simulator knows. The black analyzer reading
+  lags behind it and carries the measurement noise.
+
+## Self-test
+
+**? Help → Self-test → Run self-test** runs every scenario on a hidden station with the default
+settings. It checks the end state and key log messages, takes about 10–30 s, and leaves your
+stations untouched. Run it after any change to the simulator. A failing row says exactly what
+differed.
+
+## Common questions
+
+- **"The PID won't settle / O2 keeps drifting down."**
+  - Check that the fitted lid matches the mode. With collimator mode and the normal lid, the PID
+    is held at the collimator's minimum flow (0.3 SLPM) and O2 sits below target.
+  - The warning "flow ≤ 0.5× expected: wrong enclosure mode selected?" appears after settling.
+- **"The O2 reading wiggles near target."** That is the analyzer's noise, about 1 m% (0.001 %
+  O2), not the loop oscillating. The true bulk O2 (grey) is much steadier.
+- **"Reset didn't restore my settings."** Reset restores the plant and the controller's runtime
+  state, not your settings: those are like autosaved records. Reload the page to get all
+  defaults back.
+- **"Where are the numbers from?"** Spec §2.1 (archive data) and §2.1.10 (1 Hz noise). The
+  analysis is regenerated by `analysis/run_all.py`.
+
+## Files and versions
+
+- **Simulator:** `simulator/sample_gas_simulator.html`. Git tags mark known-good versions
+  (`git tag -n1`), e.g. `sim-v0.9`.
+- **These guides:** `docs/simulator/`. The Help page text is embedded from the Markdown files by
+  `tools/embed_help.py`; run it after editing a guide.
+- **Illustrated guide:** `docs/simulator/USER_GUIDE_ILLUSTRATED.md`. Its screen captures are
+  regenerated by `tools/make_screenshots.py`, which uses the simulator's screenshot mode
+  (`#shot=<scenario>&t=<seconds>&panel=…`).
+</script>
+<!--HELP:user:END-->
+<!--HELP:agent:BEGIN-->
+<script type="text/markdown" id="md-agent">
+# Building a control-system design simulator: guide for an AI agent
+
+**Written from building** `simulator/sample_gas_simulator.html`, an executable spec for a helium
+purge / O2 feedback controller.
+
+**Aimed at** an agent asked to build the same kind of tool for another loop. **Temperature control**
+is the worked example here: a heater, a thermal mass, a thermocouple or RTD, and an EPICS `epid` or
+PLC loop.
+
+**How to use it:** read it before writing code. Most sections are lessons that cost a real
+iteration with the user.
+
+## 1. What the tool is for
+
+- **An executable spec, not the controller.** It exists so a human can *operate* the design before
+  any IOC code is written: press buttons, break hardware, watch alarms, and find design mistakes
+  while they are cheap. Every behaviour you implement must trace to a spec section, and every design
+  change the user makes goes back into the spec.
+- **The user will treat it as a design instrument.** They will change requirements while using it:
+  "hand off 0.04 % above target", "the minimum flow should be per lid", "a user run survives a 48 h
+  downtime". The code must absorb that without degrading. Protect it (section 9).
+- **Fidelity where it changes decisions, simplicity elsewhere.** Model the plant from data, the
+  actuator from its actual driver, and the control algorithm exactly as the target record
+  implements it. The UI only has to be clear.
+
+## 2. Architecture that survived ~20 rounds of change
+
+One self-contained HTML file: no build step, no server, emailable. Plain JavaScript, canvas charts,
+no libraries.
+
+```
+Plant        physics + sensor + actuator + consumable (pure state, step(dt), 1 Hz sampling)
+Controller   state machine + PID record + alarms + accounting (sees ONLY what the real IOC sees)
+Station      Plant + Controller + history + scenario runner + log; several stations run at once
+UI           render() at ~12 fps, decoupled from simulation; admin screens generated from field tables
+Test hooks   window.SIM.run / scenario / selfTest; screenshot mode via URL hash
+```
+
+Rules that kept it maintainable:
+
+- **Fixed physics step and an integer step counter** (t = steps × DT). Never accumulate floating
+  time. The controller ticks on exact integer seconds (`steps % STEPS_PER_S === 0`), and the PID
+  on `sec % scan === 0`. Float drift in tick detection causes skipped or double ticks.
+- **The controller must not read plant internals.** Give it the same interface the IOC has:
+  readbacks polled at the device rate, puts that go through the device's own rules.
+  - In this project: `Setpoint` writes are silently ignored while the Alicat is on hold, and the
+    totalizer is read, never reset.
+  - Everything the controller knows must come through that interface, or the simulator will hide
+    design flaws.
+- **Parameters are data.** One defaults object per station for the controller, and a separate one
+  for the plant. Every admin field is a row `{key, label, unit, min, max, step, int}`, from which
+  the input, clamping, tooltip and logging are generated. Adding a parameter is then one line in
+  the defaults plus one row.
+- **Keep plant parameters visibly separate** ("simulator only") so nobody mistakes them for
+  controller settings.
+- **State entry has side effects; state ticks have conditions.** `enter(state, reason)` performs
+  the writes and logs the transition with a human reason, and each `doState()` only decides when to
+  leave. The reason strings become the operator's "Last action" text and the test oracle.
+- **The log is the product.** Every transition, override, alarm raise and clear, and world action
+  goes to one log with severity. Users read it to understand behaviour, and tests grep it.
+- **Several independent stations** (two beamline end stations in one IOC) cost almost nothing once
+  Station is a class, and they prove the controller has no hidden globals.
+
+## 3. Implement the real control algorithm, not a textbook PID
+
+The target was the synApps `epid` record. Implement *its* equations and quirks, verified from its
+source:
+
+- error = VAL − CVAL; P = KP·e; ΔI = KP·KI·e·dt; output = P + I (+ D), clamped to DRVL..DRVH
+- anti-windup: I only integrates when the output is inside the limits or moving back inward
+- bumpless enable: I is initialised from the output link's current value on FBON 0 → 1
+- ODEL output deadband
+- the sign convention: KP < 0 for a process where more actuator lowers the measurement
+
+For temperature control with a PLC or another record, find that implementation's equations and
+copy them, including the derivative filter, setpoint weighting and output rate limit.
+
+Controller features that were **added because the simulator exposed a need**, and are likely to
+transfer to temperature:
+
+| Need found in simulation | Mechanism | Temperature analogue |
+|---|---|---|
+| Loop gain changes with operating point | Gain scheduling: KP × (reference / setpoint), because the process slope ∝ setpoint | Radiation losses grow as T⁴, so gain falls at high T. Schedule by setpoint or by heater power |
+| Sensor lags the process during fast transients | Lag-compensated handoff: act on reading × exp(−k·lag) | Thermocouple lag in a fast ramp: hand off from ramp to hold early, to avoid overshoot |
+| Handoff overshoot | Hand off before reaching target (negative Δ) | Start the soak before the setpoint, by the measured overshoot |
+| Actuator should not chase noise near target | Near-target "fine band": KP × 0.5 inside an absolute band, with hysteresis | The same. Size the band from measured noise, never as a % of setpoint |
+| Minimum actuator level differs by configuration | Per-configuration output minimum (DRVL) | Minimum heater duty per fixture, or none |
+
+## 4. Model the plant from the user's data
+
+- **Ask for data early and keep asking.** Every round of real data changed the model:
+  - the weekly archive gave volume, leak rates and dead time
+  - 10 s data gave lid-lift kinetics and transport delay
+  - 1 Hz data gave the noise structure
+- **Put raw data and analysis in the repo** with one regenerate-everything script, and make the
+  simulator's parameters cite those results.
+- **Validate before using it.** Replay recorded inputs through the model and compare the outputs
+  (here: 99 % of samples within ×/÷1.5 for one lid). Then check the simulator's statistics against
+  the record, for example Allan deviation and autocorrelation of the sensor output under the same
+  conditions.
+- **Model structure for the O2 case:**
+  - one well-mixed volume
+  - a flow-dependent leak per configuration
+  - a sensor-zone first-order lag
+  - a variable transport delay (implemented as a history buffer read at t − delay, whose delay may
+    only grow at < 1 s/s so readings never run backwards)
+  - multiplicative seal variability per closure
+  - smooth blending between regimes (flow-off versus with-flow leak) instead of an if-switch
+- **Temperature analogue:**
+  - lumped thermal RC: C·dT/dt = η·P_heater·u − (T − T_amb)/R − ε·σ·A·(T⁴ − T_amb⁴)
+  - a sensor lag τ_s (thermocouple bead and sheath), and a transport delay if the sensor is
+    remote
+  - heater saturation, PWM or SSR quantisation, and slow cooling (no active cooling means
+    asymmetric authority)
+  - fixture-to-fixture variation, like the lid seal factor
+- **Model the actuator from its real driver.** Read the actual EPICS database and protocol files
+  in production and diff them against upstream; the deployed copy may differ. Reproduce every
+  behaviour that can fool a controller:
+  - disabled-while-held records
+  - resolution and quantisation
+  - built-in ramps
+  - readback polling rate
+  - totalizers
+  - what "Run", "Hold", "Reset" and similar commands actually do
+
+## 5. Noise: measure it, then classify it
+
+This project got the noise model wrong twice, and both mistakes changed the controller
+recommendation.
+
+1. **Fit a structured model, not one white-noise number.**
+   - Compute the Allan deviation of a detrended high-rate record.
+   - White noise falls as 1/√τ. A floor or rise shows a slow component. Here that component was
+     σ 0.67 m% with τ 79 s, as an Ornstein–Uhlenbeck process.
+   - Fit white + OU to the Allan deviation, and check the autocorrelation. The detrended ACF is
+     biased low at long lags, so use it as a check only.
+2. **Classify each component as process or measurement, using the plant's time constants.**
+   - A fluctuation faster than the process can move is not process. Here the enclosure mixes on
+     V/F ≈ 164 min, so an 80 s wander, or a step, cannot be bulk O2.
+   - Apply measurement-side noise to the reading only, and score controllers on the **true process
+     variable**, not the reading.
+   - Scoring on the reading favoured a tight loop. Scoring on the true O2 reversed the
+     recommendation.
+3. **Pin down vague words.** The user said "the wander is likely real". They meant the *trend*,
+   which had been removed. Ask what a word refers to before encoding it.
+
+For temperature: thermocouple noise is mostly white plus mains pickup, with a cold-junction drift.
+Real temperature cannot change faster than τ = R·C allows.
+
+## 6. Alarms: make them state-aware from the start
+
+Naive threshold alarms on a PID loop produce false alarms at every setpoint change. What worked:
+
+- **Debounce:** a level must persist for N s before an alarm is raised, changed or cleared (the
+  EPICS HYST/delay pattern). Longer persistence (5 min) for slow process alarms.
+- **Settling flag:**
+  - Set on feedback-on and on every setpoint change, recording the direction.
+  - Cleared when the process variable **crosses** the setpoint. "Within band" gave edge blips.
+  - While settling, process alarms are held off **only while progress continues**: the slope
+    toward the setpoint, from 20-sample means at each end of a 2 min window, judged after a grace
+    of dead time plus window.
+  - A stall latches, and alarms apply at once.
+  - A settle timeout catches targets that are never reached.
+- **Steadiness gate for actuator-level alarms:** "output too high/low" only when both the output
+  and the process variable are steady. A genuine fault is steady; the PID winding up or down is
+  not.
+- **Judge the controller's demand, not the delivered value,** when diagnosing configuration. An
+  empty supply must not look like "wrong mode".
+- **Per-alarm classification:** ask the user which conditions matter. "O2 too low" was not an
+  operator alarm, so it became a log note.
+
+Temperature analogues:
+- over-temperature trip (hard, not debounced)
+- "heater at 100 % for N min while below setpoint" (a heater fault, or setpoint unreachable)
+- sensor open or invalid
+- "setpoint not reached within X"
+
+## 7. Detect physical faults from kinetics
+
+The best feature ideas came from the user's physical insight. Turn them into tests of measured
+dynamics against the model:
+
+- **Lid open during a purge:**
+  - Wait for decay onset (2 % drop), then compare the decay rate over 15 s with F/V.
+  - Declare it open if the rate is below half **or** the curvature (2nd-half rate / 1st-half
+    rate) is below 0.8, meaning the decay levels off.
+  - Onset-based windows are immune to transport-delay uncertainty.
+  - This decided in ~26 s instead of 60, and caught partially open boxes a 10 s window missed.
+- **Lid lifted while regulating:** level **AND** rate. Neither alone separates a lift from slow
+  creep.
+- **Temperature analogue:**
+  - heater disconnected or thermocouple detached: the heating rate after onset is much lower than
+    P/C predicts
+  - thermocouple out of the part: the rate is too fast, with no thermal mass
+  - door open: the cooling rate is higher than the R·C model
+
+## 8. Accounting and forecasting are cheap and valued
+
+- **Consumable run-out without a dedicated sensor:** integrate the actuator's own totalizer (here
+  litres). Fit the usage rate over several windows (3, 2, 1, 0.5, 0.25 days) and show the spread
+  as the confidence range. Alarm on the median. Validate against the actual run-out in simulation.
+- **Usage per "run":** define runs from controller events, not calendar time. Here a run is a
+  series of purges, ending at the first flow-zero after the last purge, closed after a gap longer
+  than the longest downtime plus start-up delay. Measure gaps from the event that ended activity,
+  and let an operator mark a changeover.
+- **Use exact event values at boundaries.** Interpolating hourly snapshots across a 130 L purge
+  gave a 2 % error.
+- **Temperature analogue:** energy per run (kWh), heater hours, element-life forecast.
+
+## 9. Protect the simulator while it evolves
+
+- **Tag known-good versions** in git before each substantial change.
+- **Built-in self-test:** run every scenario on a hidden station with **default** parameters, and
+  check the end state plus regexes on the log (and custom checks). Show it in the Help page; it
+  runs in ~10 s.
+- **Sabotage-test the self-test.** Break the plant deliberately and confirm it fails. This one
+  failed 7 of 19 scenarios with specific reasons.
+- **Test headlessly** through `window.SIM` (run N seconds, run a scenario, return state and
+  log) rather than by clicking. Batch parameter sweeps the same way.
+- **Scenario resets must reset scenario-relevant settings.** A target changed by one scenario
+  leaked into the next and looked like a controller bug.
+- **Watch for off-by-N buffer sizes** when a window length becomes a parameter. The slope-history
+  buffer was 5 samples shorter than the averaged window, so stall detection silently never ran.
+
+## 10. UI lessons
+
+- **One source of truth per physical fact.** Two selectors for "which lid" (the controller's mode
+  and the world's lid) produced a baffling "PID won't settle" report. Link them by default, and
+  make the mismatch deliberate and visible.
+- Separate the **operator panel** (what the real GUI will show) from the **physical world**
+  (simulator-only controls), and label that separation on screen.
+- Three levels (user, admin, deep admin) keep the main panel simple while exposing every number.
+- **Time scaling** (1× to 3000×) is essential. Real loops take hours; a 4-day forecast test must
+  run in seconds.
+- Graphs need log axes for processes spanning decades, a "true value (sim only)" overlay, the
+  thresholds drawn as lines, and a controller-state strip under the time axis.
+- **Tooltips on everything,** and a Help page built from the Markdown docs at build time. A
+  single-file app cannot fetch files over `file://`, so embed them.
+- **Screenshot mode** (URL hash → run scenario to time t, open panel) makes illustrated docs
+  reproducible with a headless browser.
+
+## 11. Working with the user
+
+- Ask one question at a time, with a recommended option. Record each decision in the spec with
+  its date, and the reason when one was given.
+- Report measured numbers, not impressions ("in band after 12 min instead of 19"). When a result
+  surprises you, say so and show the check that explains it.
+- When the user's report conflicts with your test, reproduce **their** path, including UI
+  quirks, before defending the code.
+- Correct your own misattributions explicitly and everywhere: figure, README, spec, code
+  comments.
+
+## 12. Checklist for a temperature-control version
+
+1. Get the heater, sensor and controller hardware list, the EPICS or PLC record type, and the
+   deployed driver files.
+2. Get data: a heat-up, a cool-down, a hold at 1 Hz, and an open-door or fault event if possible.
+3. Fit the RC model, the sensor lag, the delay and the noise (white + slow). Validate by replay.
+4. Implement the plant, the controller (the exact record algorithm), the state machine
+   (IDLE / RAMP / SOAK / HOLD / COOLDOWN / FAULT), the interlocks, and the alarms with settling
+   logic.
+5. Add world controls: door, heater fault, sensor fault, supply voltage sag, IOC crash.
+6. Add scenarios, one per fault, with expected end states and log patterns. Add the self-test.
+7. Build the three-level UI, tooltips, Help and screenshot mode. Tag a version.
+8. Iterate with the user. Every change goes to the spec, the simulator and the self-test
+   together.
+</script>
+<!--HELP:agent:END-->
+
 <script>
 'use strict';
 // =====================================================================================
@@ -269,7 +860,7 @@ function defaultControllerParams() {
     frozenTime: 30, o2Min: -0.5, o2Max: 25,
     avgN: 10, pidScan: 10, odel: 0.01,
     gainSchedule: 1,       // 1 = KP scaled by 0.99/target (mode KP values are "at 0.99 %"); 0 = fixed KP
-    fineBand: 0,           // % O2; 0 = off. Inside |error| < fineBand, KP and KI are multiplied by the fine factors
+    fineBand: 0.01,        // % O2 (absolute; user chose ON 2026-09-25); 0 = off. Inside |error| < fineBand, KP/KI × fine factors
     fineKPx: 0.5, fineKIx: 1.0,   // (leave the band at 2 × fineBand: hysteresis). Switching is near-bumpless because error is small.
     flowMinorX: 1.5, flowMajorX: 2.0, flowLowX: 0.5, pinnedTime: 600, o2AbnormalOffset: 0.3,
     alarmDelay: 10,        // s a level must persist before an alarm is raised, changed or cleared (EPICS-style debounce)
@@ -933,6 +1524,7 @@ class Station {
   get t() { return this.steps * DT; }
   newHist() { return { t: [], o2: [], bulk: [], flow: [], cmd: [], sp: [], cyl: [], state: [], drvh: [] }; }
   log(sev, msg, kind) {
+    if (this.silent) { (this.privateLog || (this.privateLog = [])).push({ t: this.t, sev, msg }); return; }   // self-test station
     LOG.push({ t: this.t, st: this.name, sev, msg, kind });
     if (LOG.length > 6000) LOG.splice(0, 1000);
     logVersion++;
@@ -967,6 +1559,7 @@ class Station {
     if (h.t.length > HIST_CAP) for (const k in h) h[k].splice(0, 10000);
   }
   resetAll() {
+    this.privateLog = [];
     for (let i = LOG.length - 1; i >= 0; i--) if (LOG[i].st === this.name) LOG.splice(i, 1);
     logVersion++;
     this.steps = 0; this.plant.reset(); this.ctl.reinit(); this.ctl.enter('IDLE', 'station reset');
@@ -977,7 +1570,7 @@ class Station {
   }
   startScenario(sc) {
     this.resetAll();
-    this.ctl.p.target = 0.99; this.ctl.p.mode = 'A'; this.plant.lidType = 'A';   // scenarios start from defaults; setup overrides
+    this.ctl.p.target = 0.99; this.ctl.p.mode = 'A'; this.plant.lidType = 'A'; this.lidLinked = true;   // scenarios start from defaults; setup overrides
     this.log(0, `scenario: ${sc.name}`);
     if (sc.setup) sc.setup(this);
     this.scenario = { sc, i: 0, t0: Math.round(this.t) };
@@ -1012,10 +1605,10 @@ const S = () => stations[cur];
 const act = (t, label, fn) => ({ t, label, do: fn });
 const SCENARIOS = [
   { name: '1. Normal purge from air, normal lid (mode A)',
-    desc: 'Lid closed, box full of air. Purge at t = 5 s.\nWatch: lid check passes (decay ≈ 100 % of the lid-on rate). Handoff when the lag-corrected O2 < target − Δ for 5 s; the purge timeout scales with the target (≈ 1.3 × the kinetic purge time). Then a 2 min feedback delay and regulation toward 0.99 %. Mode A settles slowly (τ ≈ 169 min); try 1000×.',
+    desc: 'Lid closed, box full of air. Purge at t = 5 s.\nWatch: lid check passes (decay ≈ 100 % of the lid-on rate). Handoff when the lag-corrected O2 < target − Δ for 5 s; the purge timeout scales with the target (≈ 1.3 × the kinetic purge time). Feedback turns on as soon as the flow has settled at the expected value, then regulation at 0.99 %. Mode A settles slowly (τ ≈ 169 min); try 1000×.',
     events: [act(5, 'operator presses Purge', s => s.ctl.opPurge())] },
   { name: '2. Purge with the lid left open',
-    desc: 'Lid open; Purge at t = 5 s.\nExpect: OPEN_STOP at the 60 s lid check (zero flow). The O2 decay rate from 20 s to 60 s after full flow is compared with the lid-on rate F/V; below half means open.\nCaveat: the open-box response to 20 SLPM has never been measured. The "openMix" plant parameter sets it; lower it (e.g. 0.02) to see where an open box would start passing the check.',
+    desc: 'Lid open; Purge at t = 5 s.\nExpect: OPEN_STOP at the lid check, ~25 s after full flow (zero flow). After the decay onset (2 % drop), 15 s of decay are compared with the lid-on rate F/V: open if below half, or if the decay levels off (curvature < 0.8).\nCaveat: the open-box response to 20 SLPM has never been measured. The "openMix" plant parameter sets it; lower it (e.g. 0.02) to see where an open box would start passing the check.',
     setup: s => s.plant.liftLid(),
     events: [act(5, 'operator presses Purge (lid is open)', s => s.ctl.opPurge())] },
   { name: '3. Lid lifted during regulation (Flow Zero forgotten)',
@@ -1023,20 +1616,20 @@ const SCENARIOS = [
     setup: s => s.presetRegulating(),
     events: [act(600, 'lid lifted', s => s.plant.liftLid())] },
   { name: '4. Flow Zero, lid kept on 22 min, then Purge',
-    desc: 'Regulated, then Flow Zero at 60 s with the lid on for 22 min.\nExpect: O2 creeps up ~0.5 % and nothing trips (the detector is not armed in FLOW_ZERO, and the rise is ~1000× too slow anyway). Purge at 22 min: the drop check is skipped because O2 < 18 %.',
+    desc: 'Regulated, then Flow Zero at 60 s with the lid on for 22 min.\nExpect: O2 creeps up ~0.5 % and nothing trips (the detector is not armed in FLOW_ZERO, and the rise is ~1000× too slow anyway). Purge at 22 min: the lid check is skipped because O2 < 18 %.',
     setup: s => s.presetRegulating(),
     events: [act(60, 'operator presses Flow Zero', s => s.ctl.opFlowZero()),
              act(60 + 1320, 'operator presses Purge', s => s.ctl.opPurge())] },
   { name: '5. Flow Zero, lift 76 s later, open 2 min, re-purge (24 Sep 11:52)',
-    desc: 'Replays the measured 24 Sep sequence: Flow Zero, lift 76 s later, lid off 2 min, closed, Purge.\nExpect: no alarms (Flow Zero was used). Purge from air: the drop check runs and passes.',
+    desc: 'Replays the measured 24 Sep sequence: Flow Zero, lift 76 s later, lid off 2 min, closed, Purge.\nExpect: no alarms (Flow Zero was used). Purge from air: the lid check runs and passes.',
     setup: s => s.presetRegulating(),
     events: [act(60, 'operator presses Flow Zero', s => s.ctl.opFlowZero()),
              act(136, 'lid lifted', s => s.plant.liftLid()),
              act(256, 'lid closed', s => s.plant.closeLid()),
              act(270, 'operator presses Purge', s => s.ctl.opPurge())] },
   { name: '6. Collimator lid fitted but mode A selected',
-    desc: 'Collimator lid on the box, controller set to mode A (normal lid).\nExpect: the PID drives flow up to mode A\'s max (1.0 SLPM); O2 stays above target; "flow ≥ 2× expected" MAJOR, then "PID pinned" after 10 min. Not OPEN_STOP.',
-    setup: s => { s.plant.lidType = 'B'; s.ctl.p.mode = 'A'; s.presetRegulating(); s.plant.lidType = 'B'; },
+    desc: 'Collimator lid on the box, controller set to mode A (normal lid); O2 starts high (the collimator lid leaks at mode A\'s flow).\nExpect: the PID drives flow to mode A\'s max (1.0 SLPM) and O2 falls slowly; alarms stay quiet while it is making progress (settling). Once O2 reaches target (~2 h), "flow ≥ 2× expected" MAJOR appears: the flow the lid needs is far above mode A\'s. Not OPEN_STOP.',
+    setup: s => { s.lidLinked = false; s.plant.lidType = 'B'; s.ctl.p.mode = 'A'; s.presetRegulating(); s.plant.lidType = 'B'; },   // deliberate mismatch
     events: [act(1, 'collimator lid already fitted, mode A', s => { s.plant.lidType = 'B'; })] },
   { name: '7. Cylinder runs dry during regulation (7 h creep)',
     desc: 'Regulated; at 60 s the cylinder is empty, so flow stops while the controller still commands it.\nExpect: flow-mismatch MAJOR. O2 creeps past 10 % over hours but does NOT trip OPEN_STOP (rise ≤ 0.0005 %/s). Run at 3000×.',
@@ -1057,7 +1650,7 @@ const SCENARIOS = [
              act(1500, 'analyzer back to normal', s => { s.plant.an.mode = 'normal'; }),
              act(1560, 'operator presses Resume PID', s => s.ctl.opResume())] },
   { name: '11. Analyzer INVALID at purge start (blind purge)',
-    desc: 'The analyzer is INVALID when Purge is pressed.\nExpect: a blind purge (full timeout, no drop check), then OPEN_LOOP. The analyzer returns at 600 s and the operator resumes PID at 660 s.',
+    desc: 'The analyzer is INVALID when Purge is pressed.\nExpect: a blind purge (full timeout, no lid check), then OPEN_LOOP. The analyzer returns at 600 s and the operator resumes PID at 660 s.',
     setup: s => { s.plant.an.mode = 'invalid'; s.plant.an.sevr = 3; },
     events: [act(5, 'operator presses Purge', s => s.ctl.opPurge()),
              act(600, 'analyzer back to normal', s => { s.plant.an.mode = 'normal'; }),
@@ -1198,7 +1791,7 @@ function drawChart(cv, cfg) {
   if (!cfg.noX) {
     const st = [10, 30, 60, 120, 300, 600, 1200, 1800, 3600, 7200, 14400, 21600, 43200].find(v => (t1 - t0) / v <= 8) || 86400;
     g.fillStyle = '#333'; g.font = '10px Segoe UI';
-    for (let t = Math.ceil(t0 / st) * st; t <= t1; t += st) { const x = X(t); g.fillRect(x, T + ph, 1, 3); g.fillText(fmtT(t), x - 18, T + ph + 13); }
+    for (let t = Math.max(0, Math.ceil(t0 / st) * st); t <= t1; t += st) { const x = X(t); g.fillRect(x, T + ph, 1, 3); g.fillText(fmtT(t), x - 18, T + ph + 13); }   // no ticks before t = 0
   }
 }
 
@@ -1305,7 +1898,8 @@ function clampField(f, raw) {
 }
 function fieldRow(f, obj, onChange) {
   const id = 'f_' + Math.random().toString(36).slice(2);
-  return { html: `<div>${f.l}</div><input id="${id}" type="number" step="${f.step}" value="${obj[f.k]}"><div>${f.u}</div><div class="lim">${f.min} … ${f.max}</div>`,
+  const tip = `${f.l}${f.u ? ' [' + f.u + ']' : ''}. Allowed ${f.min} … ${f.max}; out-of-range entries are clamped. Parameter: ${f.k}`;
+  return { html: `<div title="${tip}">${f.l}</div><input id="${id}" type="number" step="${f.step}" value="${obj[f.k]}" title="${tip}"><div>${f.u}</div><div class="lim">${f.min} … ${f.max}</div>`,
            bind: () => { const el = $(id); el.addEventListener('change', () => {
              const v = clampField(f, el.value);
              if (v == null) { el.value = obj[f.k]; el.classList.add('flash'); setTimeout(() => el.classList.remove('flash'), 600); return; }
@@ -1333,7 +1927,7 @@ function renderModal() {
       h += `<tr><td>${f.l}</td>`;
       for (const m of Object.keys(p.modes)) {
         const id = `mf_${m}_${f.k}`;
-        h += `<td><input id="${id}" type="number" step="${f.step}" value="${p.modes[m][f.k]}"></td>`;
+        h += `<td><input id="${id}" type="number" step="${f.step}" value="${p.modes[m][f.k]}" title="${f.l} for mode ${m} (${p.modes[m].name}) [${f.u}]. Allowed ${f.min} … ${f.max}. Parameter: modes.${m}.${f.k}"></td>`;
         binds.push(() => { const el = $(id); el.addEventListener('change', () => {
           const v = clampField(f, el.value); if (v == null) { el.value = p.modes[m][f.k]; return; }
           p.modes[m][f.k] = v; el.value = v; st.log(0, `settings: mode ${m} ${f.l} = ${v}`); }); });
@@ -1420,7 +2014,8 @@ function buildPlantGrid() {
   let h = '';
   for (const f of PLANT_FIELDS) {
     const id = 'pf_' + f.k;
-    h += `<div>${f.l} <span class="lim">${f.u}</span></div><input id="${id}" type="number" step="${f.step}" value="${st.pp[f.k]}"><div></div>`;
+    const tip = `Simulator physics (the controller never sees this): ${f.l}${f.u ? ' [' + f.u + ']' : ''}. Allowed ${f.min} … ${f.max}. Parameter: ${f.k}`;
+    h += `<div title="${tip}">${f.l} <span class="lim">${f.u}</span></div><input id="${id}" type="number" step="${f.step}" value="${st.pp[f.k]}" title="${tip}"><div></div>`;
     binds.push(() => { const el = $(id); el.addEventListener('change', () => { const v = clampField(f, el.value); if (v == null) { el.value = st.pp[f.k]; return; } st.pp[f.k] = v; el.value = v; st.world(`plant ${f.l} = ${v}`); }); });
   }
   $('plantGrid').innerHTML = h; binds.forEach(b => b());
@@ -1623,7 +2218,216 @@ window.SIM = {
              log: LOG.filter(e => e.st === st.name).map(e => `${fmtT(e.t)} ${e.sev ? SEV_NAME[e.sev] + ' ' : ''}${e.msg}`) }; },
 };
 
-wire(); buildTabs(); onStationChange();
+// =====================================================================================
+//  Self-test: every scenario on a hidden station with DEFAULT settings (user edits and the two
+//  visible stations are untouched). Guards the simulator against regressions during development.
+// =====================================================================================
+const SELFTEST = [
+  { n: '1.',  dur: 3600,   state: 'REGULATE', has: ['lid check passed', '→ REGULATE'] },
+  { n: '2.',  dur: 600,    state: 'OPEN_STOP', has: ['enclosure open\\?'] },
+  { n: '3.',  dur: 1200,   state: 'OPEN_STOP', has: ['enclosure opened, flow stopped'] },
+  { n: '4.',  dur: 1800,   state: 'REGULATE', has: ['lid check skipped'] },
+  { n: '5.',  dur: 1800,   state: 'REGULATE', has: ['lid check passed'] },
+  { n: '6.',  dur: 14400,  state: 'REGULATE', has: ['flow ≥ 2× expected'] },
+  { n: '7.',  dur: 3600,   state: 'REGULATE', has: ['flow mismatch'] },
+  { n: '8.',  dur: 1200,   state: 'REGULATE', has: ['MFC was on hold, resumed'] },
+  { n: '9.',  dur: 1200,   state: 'REGULATE', has: ['MFC on hold, cannot resume'] },
+  { n: '10.', dur: 2400,   state: 'REGULATE', has: ['O2 reading frozen', 'operator pressed Resume PID'] },
+  { n: '11.', dur: 1200,   state: 'REGULATE', has: ['blind purge', 'operator pressed Resume PID'] },
+  { n: '12.', dur: 1200,   state: 'REGULATE', has: ['ramp rate 0', 'handoff minimum'] },
+  { n: '13.', dur: 1200,   state: 'REGULATE', has: ['flow mismatch'] },
+  { n: '14.', dur: 1200,   state: 'REGULATE', has: ['IOC crashed', 'resume regulation'] },
+  { n: '15.', dur: 3600,   state: 'REGULATE', has: ['PID pinned at max flow|O2 abnormally high'] },
+  { n: '16.', dur: 10800,  state: 'REGULATE', has: ['settled: O2 reached 0.500'] },
+  { n: '17.', dur: 172800, state: null, has: [], check: s => s.ctl.cylEst.filter(e => e.h != null).length >= 3 ? '' : 'fewer than 3 forecast windows' },
+  { n: '18.', dur: 3600,   state: 'REGULATE', has: ['lid check passed'] },
+  { n: '19.', dur: 777600, state: null, has: [], check: s => { const u = s.ctl.usageReport(); return u.runs.length === 2 && u.runs[0].purges === 23 ? '' : `runs ${u.runs.length}, first ${u.runs[0] && u.runs[0].purges} purges`; } },
+];
+function runSelfTest(onRow, onDone) {
+  const st = new Station('SELFTEST', 'TEST:SampleGas:', 'TEST:Alicat:', 'TEST:O2', '');
+  st.silent = true;
+  let i = 0, fails = 0;
+  const next = () => {
+    if (i >= SELFTEST.length) { onDone(fails); return; }
+    const T = SELFTEST[i++], sc = SCENARIOS.find(s => s.name.startsWith(T.n));
+    const t0 = performance.now();
+    st.startScenario(sc);
+    for (let k = 0; k < T.dur * STEPS_PER_S; k++) st.step();
+    const msgs = (st.privateLog || []).map(e => e.msg).join('\n');
+    const probs = [];
+    if (T.state && st.ctl.state !== T.state) probs.push(`ended ${st.ctl.state}, expected ${T.state}`);
+    for (const h of T.has) if (!new RegExp(h).test(msgs)) probs.push(`no log matching /${h}/`);
+    if (T.check) { const m = T.check(st); if (m) probs.push(m); }
+    if (probs.length) fails++;
+    onRow(sc.name, probs, T.dur, performance.now() - t0);
+    setTimeout(next, 0);
+  };
+  next();
+}
+
+// =====================================================================================
+//  Help page: minimal Markdown renderer for the embedded guides
+// =====================================================================================
+function mdInline(s) {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>')
+    .replace(/(^|[^*])\*([^*\s][^*]*)\*/g, '$1<i>$2</i>')
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank">$1</a>');
+}
+function renderMarkdown(md) {
+  // join indented continuation lines onto their list item first, so inline markup may span lines
+  const raw = md.replace(/\r/g, '').split('\n'), L = [];
+  let inFence = false;
+  for (const line of raw) {
+    if (/^```/.test(line)) inFence = !inFence;
+    const prev = L.length ? L[L.length - 1] : '';
+    if (!inFence && /^\s+\S/.test(line) && !/^\s*([-*]|\d+\.)\s/.test(line) && /^\s*([-*]|\d+\.)\s/.test(prev)) L[L.length - 1] = prev + ' ' + line.trim();
+    else L.push(line);
+  }
+  const out = [];
+  let i = 0, para = [], listStack = [];
+  const flushP = () => { if (para.length) { out.push(`<p>${mdInline(para.join(' '))}</p>`); para = []; } };
+  const closeLists = (lvl) => { while (listStack.length > lvl) out.push(`</${listStack.pop()}>`); };
+  while (i < L.length) {
+    const line = L[i];
+    if (/^```/.test(line)) { flushP(); closeLists(0); const buf = []; i++; while (i < L.length && !/^```/.test(L[i])) buf.push(L[i++]); i++;
+      out.push(`<pre><code>${buf.join('\n').replace(/&/g, '&amp;').replace(/</g, '&lt;')}</code></pre>`); continue; }
+    const h = line.match(/^(#{1,4})\s+(.*)/);
+    if (h) { flushP(); closeLists(0); out.push(`<h${h[1].length}>${mdInline(h[2])}</h${h[1].length}>`); i++; continue; }
+    if (/^\s*\|.*\|\s*$/.test(line)) { flushP(); closeLists(0); const rows = []; while (i < L.length && /^\s*\|.*\|\s*$/.test(L[i])) rows.push(L[i++]);
+      const cells = r => r.trim().replace(/^\||\|$/g, '').split('|').map(c => c.trim());
+      let html = '<table>'; rows.forEach((r, k) => { if (k === 1 && /^[\s|:-]+$/.test(r)) return; const tag = k === 0 ? 'th' : 'td';
+        html += '<tr>' + cells(r).map(c => `<${tag}>${mdInline(c)}</${tag}>`).join('') + '</tr>'; });
+      out.push(html + '</table>'); continue; }
+    const li = line.match(/^(\s*)([-*]|\d+\.)\s+(.*)/);
+    if (li) { flushP(); const lvl = Math.floor(li[1].length / 2) + 1, type = /\d/.test(li[2]) ? 'ol' : 'ul';
+      while (listStack.length < lvl) { out.push(`<${type}>`); listStack.push(type); }
+      closeLists(lvl); out.push(`<li>${mdInline(li[3])}</li>`); i++; continue; }
+    if (/^\s*$/.test(line)) { flushP(); if (!(i + 1 < L.length && /^\s*([-*]|\d+\.)\s/.test(L[i + 1]))) closeLists(0); i++; continue; }
+    if (listStack.length && /^\s+\S/.test(line)) { out[out.length - 1] = out[out.length - 1].replace(/<\/li>$/, ' ' + mdInline(line.trim()) + '</li>'); i++; continue; }
+    closeLists(0); para.push(line.trim()); i++;
+  }
+  flushP(); closeLists(0);
+  return out.join('\n');
+}
+function showHelp(tab) {
+  $('help').classList.remove('hidden');
+  document.querySelectorAll('.helpTabs button').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
+  const body = $('helpBody');
+  if (tab === 'selftest') {
+    body.innerHTML = '<h2>Self-test</h2><p>Runs every scenario on a hidden station with the <b>default</b> settings and checks that it ends where it should. ' +
+      'Your two stations and your edited settings are not touched. Run it after any change to the simulator. It takes about half a minute.</p>' +
+      '<button id="stRun">Run self-test</button><table id="stTable"><tr><th>Scenario</th><th>Simulated</th><th>Result</th></tr></table><p id="stSum"></p>';
+    $('stRun').onclick = () => {
+      $('stRun').disabled = true; $('stSum').textContent = 'running…';
+      runSelfTest((name, probs, dur, ms) => {
+        $('stTable').insertAdjacentHTML('beforeend', `<tr><td>${name}</td><td>${fmtDur(dur / 3600)}</td><td class="${probs.length ? 'st-fail' : 'st-pass'}">${probs.length ? 'FAIL: ' + probs.join('; ') : 'pass'}</td></tr>`);
+      }, fails => { $('stSum').innerHTML = fails ? `<span class="st-fail">${fails} scenario(s) failed</span>` : `<span class="st-pass">All ${SELFTEST.length} scenarios passed.</span>`; $('stRun').disabled = false; });
+    };
+  } else {
+    body.innerHTML = renderMarkdown($(tab === 'user' ? 'md-user' : 'md-agent').textContent);
+  }
+  body.scrollTop = 0;
+}
+
+// =====================================================================================
+//  Tooltips for the main screen (admin fields get theirs from the field definitions)
+// =====================================================================================
+const TIPS = {
+  stationTabs: 'Two independent controllers in one IOC (15IDC and 15IDE). Click to view a station; both keep running. Dot colour = worst alarm.',
+  btnPlay: 'Pause or resume simulated time. Both stations pause together.',
+  btnStep: 'Advance 10 s of simulated time (useful while paused).',
+  speed: 'Simulated seconds per real second. 3000× runs a day in about 30 s.',
+  clock: 'Simulated time of the selected station since its last reset (h:mm:ss).',
+  btnHelp: 'User guide, the guide for building a similar simulator, and the self-test.',
+  banner: 'Active alarms, most severe first. MINOR = yellow, MAJOR = red. The real Phoebus panel shows the same texts.',
+  roO2Box: 'O2 reading from the analyzer (15IDC:D1Dmm_calc), updated at 1 Hz. The border colours with O2 alarms.',
+  roFlowBox: 'Helium flow measured by the Alicat (Flow_RBV). "MFC STATUS: HLD" means the valve is on hold.',
+  roSPBox: 'Alicat setpoint readback (Setpoint_RBV) and the value the controller last commanded.',
+  roCylBox: 'Litres of helium left, counted from the Alicat totalizer since "New He cylinder fitted", and the run-out forecast range.',
+  stateBadge: 'Controller state (see Help → User guide → States).',
+  ledRange: 'Green when O2 is within target ± tolerance.',
+  progress: 'Details of the current state: purge timer and lid check, handoff countdown, or PID internals.',
+  selMode: 'Enclosure mode (lid type). Sets the expected flow, PID gains and flow limits. With "fitted lid follows the selected mode" ticked, the simulated lid changes too.',
+  inTarget: 'O2 target in % (0.2–5). Changing it while regulating starts a new settling phase.',
+  btnPurge: 'Start a purge: pre-checks, 20 SLPM until the lag-corrected O2 is below target − Δ, then handoff to the PID.',
+  btnZero: 'Set the flow to zero (use before opening the enclosure). Press Purge to resume.',
+  btnResume: 'Only in OPEN_LOOP (O2 was lost): return to PID control once the O2 reading is valid again.',
+  btnNewCyl: 'Press after fitting a full helium cylinder. Restarts the litres-left count and the run-out forecast.',
+  btnAdmin: 'Beamline-staff settings: tolerances, purge, PID gains per lid, alarm thresholds, usage report, live internals. Deep admin is inside.',
+  win: 'Time span shown in the graphs.',
+  logO2: 'Logarithmic O2 axis (useful during purges, which span 20 % to 1 %).',
+  logFlow: 'Logarithmic flow axis (purge 20 SLPM versus hold 0.25 SLPM).',
+  showBulk: 'Also plot the true well-mixed O2 of the enclosure, which only the simulator knows. The analyzer reading lags and is noisier.',
+  cO2: 'O2: analyzer reading (black), true bulk (grey dashed), target band (green), target − Δ, lid threshold 10 %, lid-check skip level.',
+  cFlow: 'Helium flow: measured (blue), commanded setpoint (orange), PID maximum (red dashed), expected flow for the mode (purple).',
+  cCyl: 'Helium left in the cylinder, from the Alicat totalizer.',
+  cState: 'Controller state over time.',
+  worldStatus: 'The simulated physical world: lid, true O2, transport delay, Alicat internals, cylinder, analyzer mode.',
+  wClose: 'Put the lid on (seals the enclosure).', wLift: 'Lift the lid off: O2 rises to ambient within ~30 s.',
+  wCrack: 'Lid on but leaking (extra ingress). O2 rises slowly; the PID compensates up to its maximum flow.',
+  wLidType: 'Which lid is physically fitted. Choosing a different lid from the selected mode tests a wrong-mode setup.',
+  wReseat: 'Re-seat the lid: random seal quality ×/÷1.3, as measured between real closures.',
+  wLink: 'When ticked, choosing an enclosure mode also fits that lid. Untick to test a wrong mode selection.',
+  wHold: 'Put the Alicat on hold with the valve at its current opening (setpoint writes are then ignored).',
+  wHoldOpen: 'Hold with the valve at 100 % (0.7 SLPM here), as seen in the 2026-06-18 serial trace.',
+  wHoldStuck: 'Hold that ignores the Run command: tests the "cannot resume" alarm.',
+  wUnhold: 'Clear the hold at the device.',
+  wRamp: 'Alicat ramp rate in SLPM/s (0 = no ramp, instant). Press Set to apply.', wRampSet: 'Apply the ramp rate.',
+  wGas: 'Alicat gas table. Anything other than He makes the flow reading wrong (the controller warns).',
+  wRefill: 'Replace the cylinder in the simulated world. The operator still has to press "New He cylinder fitted".',
+  wLow: 'Cylinder nearly empty: flow delivery starts to fall.', wEmpty: 'Cylinder empty: no flow.',
+  wCylPv: 'Simulate a cylinder-pressure PV (it does not exist yet on the beamline).',
+  wDip: 'Ambient O2 dips by 0.6 % for 1 min (breath, helium pocket). Only matters with the lid open.',
+  wCrash: 'Crash the controller IOC. The Alicat holds its last flow; the panel shows a heartbeat alarm.',
+  wRestart: 'Restart the IOC (start_ioc 15LSS_sample_gas). It resumes according to spec §4.7.',
+  scSel: 'Scripted test scenarios from the spec. Each resets the station first.',
+  scRun: 'Reset this station and run the selected scenario. Other station is not affected.',
+  scReset: 'Reset this station: box full of air, lid on, controller IDLE. Settings are kept.',
+  plantGrid: 'Plant model parameters (simulator only). The controller never sees these.',
+  logBoth: 'Show events from both stations in the log.',
+};
+function applyTips() {
+  for (const [id, tip] of Object.entries(TIPS)) { const el = $(id); if (el) el.title = tip; }
+  document.querySelectorAll('input[name=an]').forEach(r => r.parentElement.title = 'Analyzer behaviour: normal, value frozen (tests the frozen detector), or INVALID severity.');
+}
+
+// =====================================================================================
+//  Screenshot mode (documentation): #shot=<scenario number>&t=<s>&panel=admin|deep|help|agent|selftest&win=<s>&station=0|1
+//  e.g. sample_gas_simulator.html#shot=1&t=900&win=1800
+// =====================================================================================
+function shotMode() {
+  const q = new URLSearchParams(location.hash.slice(1));
+  if (!q.has('shot')) return;
+  // fixed random seed (mulberry32) so documentation captures are exactly reproducible
+  let seed = (+q.get('seed') || 1) >>> 0;
+  Math.random = () => { seed = (seed + 0x6D2B79F5) >>> 0; let t = seed; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+  _g = null;
+  playing = false; $('btnPlay').textContent = '▶ Run';
+  cur = +(q.get('station') || 0); buildTabs();
+  const sc = SCENARIOS.find(s => s.name.startsWith(q.get('shot') + '.'));
+  if (sc) { const st = S(); st.startScenario(sc); for (let k = 0; k < (+q.get('t') || 600) * STEPS_PER_S; k++) st.step(); }
+  if (q.has('win')) $('win').value = q.get('win');
+  $('scSel').value = SCENARIOS.findIndex(s => s.name.startsWith((q.get('sc') || q.get('shot')) + '.'));
+  $('scSel').dispatchEvent(new Event('change'));
+  onStationChange(); render();
+  const panel = q.get('panel');
+  if (panel === 'admin' || panel === 'deep') { openModal('admin'); if (panel === 'deep') { modalLevel = 'deep'; renderModal(); } updateModalLive(); }
+  if (panel === 'help' || panel === 'agent' || panel === 'selftest') showHelp(panel === 'help' ? 'user' : panel);
+  if (q.has('details')) document.querySelector('details').open = true;
+  if (q.has('lidunlinked')) { S().lidLinked = false; $('wLink').checked = false; }
+  if (q.has('scroll')) { const el = $(q.get('scroll')); if (el) el.scrollIntoView({ block: 'start' }); }
+}
+
+wire(); buildTabs(); onStationChange(); applyTips();
+$('btnHelp').onclick = () => showHelp('user');
+$('helpClose').onclick = () => $('help').classList.add('hidden');
+$('help').addEventListener('click', e => { if (e.target.id === 'help') $('help').classList.add('hidden'); });
+document.querySelectorAll('.helpTabs button').forEach(b => b.onclick = () => showHelp(b.dataset.tab));
+window.addEventListener('keydown', e => { if (e.key === 'Escape') $('help').classList.add('hidden'); });
+window.SIM.selfTest = runSelfTest;
+shotMode();
 requestAnimationFrame(frame);
 </script>
 </body>

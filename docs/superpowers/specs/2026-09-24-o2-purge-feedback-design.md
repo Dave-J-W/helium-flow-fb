@@ -228,9 +228,15 @@ The model's known departures are listed in 2.1.5.
   - **Fine band 0.01 %, KP × 0.5** (Deep admin, off by default): bulk std 0.60 / 0.66 m%, with
     **7 / 11** changes per hour. A 30 % worse seal peaks at 12 / 19 m% bulk, still in band.
   - **Heavier smoothing** (30 samples) is worst: 0.79 / 0.83 m%.
-  - **Decision for the user:** the fine band costs almost nothing in bulk stability and cuts MFC
-    moves ~4×. The band width must be absolute and several times the ~1 m% scatter
-    (≥ 0.005 %), not a percentage of target.
+  - **DECIDED 2026-09-25: fine band ON by default,** 0.01 % absolute with KP × 0.5. It costs
+    almost nothing in bulk stability and cuts MFC moves ~4×. The band width must stay absolute and
+    several times the ~1 m% scatter (≥ 0.005 %), not a percentage of target.
+- **Simulator documentation** (2026-09-25), all regenerable:
+  - `docs/simulator/USER_GUIDE.md` (text; also the simulator's Help page)
+  - `USER_GUIDE_ILLUSTRATED.md` (14 seeded screen captures from `tools/make_screenshots.py`)
+  - `AGENT_GUIDE_building_a_control_simulator.md` (for building a similar simulator, e.g. for
+    temperature control)
+  - The simulator has tooltips, a Help page, and a built-in self-test of all 19 scenarios.
 
 ## 3. Architecture
 

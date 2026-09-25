@@ -27,9 +27,12 @@ table { border-collapse: collapse; margin: 8px 0; font-size: 8.8pt; width: 100%;
 th, td { border: 1px solid #bbb; padding: 3px 5px; vertical-align: top; text-align: left; }
 th { background: #e9eef5; }
 tr { page-break-inside: avoid; }
+img { max-width: 100%; border: 1px solid #999; page-break-inside: avoid; }
 """
+# <base> makes relative image paths (e.g. img/01.png) resolve from the Markdown file's folder,
+# although the HTML is written to a temporary directory.
 html = f"""<!doctype html><html><head><meta charset="utf-8"><title>{src.stem}</title>
-<style>{css}</style></head><body>{body}</body></html>"""
+<base href="{src.resolve().parent.as_uri()}/"><style>{css}</style></head><body>{body}</body></html>"""
 html_path.write_text(html, encoding="utf-8")
 
 edge = r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"
