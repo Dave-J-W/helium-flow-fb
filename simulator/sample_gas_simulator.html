@@ -240,8 +240,8 @@ function defaultControllerParams() {
     target: 0.99, tol: 0.02, delta: 0.01, mode: 'A',          // Δ 0.15 → 0.01 (user, 2026-09-25)
     purgeLag: 12,          // s, analyzer lag at purge flow (transport ~10 s + sensor zone); handoff uses the lag-corrected O2. 0 = off
     modes: {
-      A: { name: 'Normal lid', baseFlow: 0.25, n: 1.0, KP: -9.3, KI: 8.8e-4, drvh: 1.0 },
-      B: { name: 'Collimator lid', baseFlow: 0.84, n: 0.53, KP: -10, KI: 1.4e-3, drvh: 2.0 },   // retuned 2026-09-25 (was −4.4 / 8.8e-4)
+      A: { name: 'Normal lid', baseFlow: 0.25, n: 1.0, KP: -9.3, KI: 8.8e-4, drvh: 1.0, drvl: 0.05 },
+      B: { name: 'Collimator lid', baseFlow: 0.84, n: 0.53, KP: -10, KI: 1.4e-3, drvh: 2.0, drvl: 0.3 },   // KP/KI retuned 2026-09-25; per-lid minimum flow (user)
     },
     purgeFlow: 20, dropSkipLevel: 18,
     purgeTimeoutMargin: 1.3,   // timeout = margin × kinetic purge time to target − Δ (scales with target)
@@ -251,10 +251,10 @@ function defaultControllerParams() {
     kinT1: 20,             // s after full flow: start of the decay-rate window
     dropCheckTime: 60,     // s after full flow: end of the window, where the lid decision is made
     openSlopeFrac: 0.5,    // lid judged open if the measured decay rate < this fraction of F/V
-    handoffHold: 5, handoffFlowTol: 0.05, fbDelay: 120,
+    handoffHold: 5, handoffFlowTol: 0.05, fbDelay: 0,   // feedback delay 120 → 0 s (user, 2026-09-25)
     lidLevel: 10, lidFilter: 5, lidSlope: 0.2, lidSlopeWindow: 60, lidArmLevel: 9,
     rampMaxPurge: 5, rampMinHandoff: 2,
-    hardCeiling: 2.0, drvlMin: 0.01,   // global minimum PID flow (user, 2026-09-25; was max(0.1, 0.5 × expected))
+    hardCeiling: 2.0,      // minimum PID flow is per lid (modes[].drvl); the global floor was removed (user, 2026-09-25)
     mismatchAbs: 0.05, mismatchFrac: 0.05, mismatchMargin: 5,
     holdDetect: 3, holdRetries: 3, holdRetryInterval: 10, holdSlowRetry: 60,
     frozenTime: 30, o2Min: -0.5, o2Max: 25,
@@ -419,6 +419,7 @@ class Controller {
     this.o2hist = []; this.rateHist = []; this.maxRate = 0; this.aboveCount = 0; this.lidArmed = false;
     this.avgBuf = []; this.blind = false;
     this.lastCmd = null; this.lastCmdTime = 0; this.flowAtCmd = 0;
+    this.spSeen = null; this.spChangeT = 0; this.flowAtSpChange = 0;
     this.holdSec = 0; this.holdAttempts = 0; this.nextHoldAttempt = 0; this.holdRecovering = false;
     this.pinnedSec = 0; this.pinnedLowSec = 0; this.heartbeat = 0; this.deb = {}; this.settleT0 = this.now;
     this.rbv = this.plant.rbv;
@@ -472,7 +473,7 @@ class Controller {
     // mode's KP (tuned at 0.99 %) is scaled by 0.99/target to keep the loop gain constant. KI (repeats/s) is unchanged.
     e.VAL = p.target; e.KP = p.gainSchedule ? m.KP * (0.99 / p.target) : m.KP; e.KI = m.KI; e.ODEL = p.odel;
     e.DRVH = Math.min(m.drvh, p.hardCeiling);
-    e.DRVL = Math.min(e.DRVH, p.drvlMin);
+    e.DRVL = Math.min(e.DRVH, m.drvl);   // per-lid minimum flow (no global floor)
   }
   purgeTimeout() {                             // §4.2: kinetic purge time to target − Δ, × margin
     const p = this.p, sd = this.sd || {};
@@ -652,12 +653,14 @@ class Controller {
   }
   alarmChecks() {
     const p = this.p, r = this.rbv, s = this.state;
-    // flow mismatch (§5.1), compared against the last value this controller wrote
-    if (s !== 'IDLE' && this.lastCmd != null && r.running) {
-      const allowed = (r.ramp > 0 ? Math.abs(this.lastCmd - this.flowAtCmd) / r.ramp : 0) + p.mismatchMargin;
-      const tol = Math.max(p.mismatchAbs, p.mismatchFrac * this.lastCmd);
-      const off = Math.abs(this.lastCmd - r.flow) > tol;
-      if (off && this.now - this.lastCmdTime >= allowed) this.setAlarm('mismatch', 2, 'flow mismatch: cylinder empty or MFC fault?');
+    // flow mismatch (§5.1): Flow_RBV against the Alicat's own Setpoint_RBV (user, 2026-09-25: the live PV is reliable).
+    // Writes dropped while the MFC is on hold are covered by the hold monitor, not by this check.
+    if (this.spSeen == null || Math.abs(r.sp - this.spSeen) > 1e-9) { this.spSeen = r.sp; this.spChangeT = this.now; this.flowAtSpChange = r.flow; }
+    if (s !== 'IDLE' && r.running) {
+      const allowed = (r.ramp > 0 ? Math.abs(r.sp - this.flowAtSpChange) / r.ramp : 0) + p.mismatchMargin;
+      const tol = Math.max(p.mismatchAbs, p.mismatchFrac * r.sp);
+      const off = Math.abs(r.sp - r.flow) > tol;
+      if (off && this.now - this.spChangeT >= allowed) this.setAlarm('mismatch', 2, 'flow mismatch: cylinder empty or MFC fault?');
       else if (!off) this.clearAlarm('mismatch');
     } else this.clearAlarm('mismatch', true);
     if (s === 'REGULATE') {
@@ -1021,6 +1024,7 @@ const ADMIN_MODE_FIELDS = [
   F('KP', 'epid KP at 0.99 % target (negative; scaled by 0.99/target)', 'SLPM/%', -100, 0, 0.1),
   F('KI', 'epid KI', '1/s', 0, 0.05, 0.0001),
   F('drvh', 'Max PID flow (DRVH, capped by hard ceiling)', 'SLPM', 0.1, 20, 0.05),
+  F('drvl', 'Min PID flow (DRVL)', 'SLPM', 0, 5, 0.01),
 ];
 const DEEP_FIELDS = [
   F('V', 'Enclosure volume (sets the lid-on purge decay rate F/V)', 'L', 5, 200, 0.5),
@@ -1038,7 +1042,6 @@ const DEEP_FIELDS = [
   F('rampMaxPurge', 'Ramp clamp at purge start (max; 0 counts as instant)', 'SLPM/s', 0.5, 20, 0.5),
   F('rampMinHandoff', 'Ramp clamp at handoff (min)', 'SLPM/s', 0.1, 10, 0.1),
   F('hardCeiling', 'Hard PID flow ceiling (surface vibration)', 'SLPM', 0.1, 20, 0.1),
-  F('drvlMin', 'Global minimum PID flow (DRVL)', 'SLPM', 0, 1, 0.01),
   F('purgeTimeoutMin', 'Purge timeout: minimum', 's', 30, 1800, 10, true),
   F('purgeTimeoutMax', 'Purge timeout: maximum', 's', 60, 7200, 30, true),
   F('ambientRef', 'O2 assumed at start of a blind purge', '%', 5, 21, 0.1),

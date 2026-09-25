@@ -487,6 +487,11 @@ Zero flow happens only for a confirmed open enclosure or an explicit operator re
 
 ### 5.1 Flow-mismatch rule
 
+**DECIDED 2026-09-25:** compare `Flow_RBV` with the Alicat's own **`Setpoint_RBV`**. The user
+confirms the live PV is reliable; the gaps seen in 2.1.9 are an archiving artefact. Writes that
+the Alicat drops while on hold are caught by the hold monitor (4.6.2), not by this rule. The
+allowed ramp time is measured from the moment `Setpoint_RBV` changes.
+
 When the setpoint changes, compute:
 
 ```
@@ -538,11 +543,22 @@ Both overrides are logged to `$(PP)LastAction` and increment `$(PP)OverrideCount
 - **Scan and deadband.** `SCAN` = 10 s. `ODEL` = 0.01 SLPM suppresses writes below the MFC's
   resolution. `epid` keeps accumulating the integral internally (VERIFIED). There is no error
   deadband: the 0.01 % sensor noise × `KP` is already below the MFC's resolution (DERIVED).
-- **Limits (REVISED 2026-09-25).** `DRVL` = **0.01 SLPM**, one global minimum set by the user:
-  if the enclosure needs less helium, it gets less. `DRVH` = mode ceiling, **hard maximum
-  2.0 SLPM**, to be raised or lowered by the surface-vibration test. The old
-  `DRVL` = max(0.1, 0.5 × expected) held a normal lid in collimator mode at 0.42 SLPM, with O2
-  drifting below target.
+- **Limits (REVISED 2026-09-25).**
+  - **`DRVL` is a per-lid minimum flow, with no global floor:** normal lid **0.05 SLPM**,
+    collimator lid **0.3 SLPM**. It is set per mode in Admin, and a new, tighter enclosure gets
+    its own mode with its own minimum.
+  - **Tested in the simulator:**
+    - After a purge to 0.99 %, O2 peaks at 1.007 % (normal lid) and 1.034 % (collimator lid).
+      A 0.01 SLPM floor let the collimator lid overshoot to 1.12 %, because it leaks fast at very
+      low flow.
+    - Purges to 0.5–2 % settle within ±0.02 % in 12–20 min on both lids.
+  - **`DRVH`** = mode ceiling, **hard maximum 2.0 SLPM**, to be raised or lowered by the
+    surface-vibration test.
+  - **History:** the original `DRVL` = max(0.1, 0.5 × expected) held a normal lid in collimator
+    mode at 0.42 SLPM.
+- **Feedback delay after handoff: 0 s** (user, 2026-09-25; was 120 s). The lag-corrected handoff
+  already accounts for the sensor settling. In the simulator a delay only added 1–4 min to
+  settling.
 - **Gain scheduling (ADDED 2026-09-25).**
   - Near the operating point the O2 slope per SLPM is ≈ C/V, proportional to the target. A KP
     tuned at 1 % is therefore 3× too strong at 3 %: the simulator's normal lid oscillated between
@@ -762,7 +778,8 @@ Findings from the first scenario runs, to be decided:
    - Gains: model starting values in 6.0, 10–20× the provisional `KP`. Confirm by bump test.
    - Alicat ramp-rate-0 semantics: open.
 5. **Purge timeout vs Δ** (4.2): with target 0.99 % and Δ 0.15 %, reaching target − Δ from air takes 6.4–6.6 min, about the 6.5 min timeout. Raise the timeout (~7.5 min), reduce Δ, or accept the routine alarm.
-6. **Setpoint_RBV reliability** (2.1.9): the archiver shows it missing 25 of 41 purges and one flow-off, and reading mid-ramp values.
+6. **Setpoint_RBV reliability: RESOLVED 2026-09-25.** The user confirms the live PV is reliable,
+   and the mismatch rule uses it (5.1). Original note (2.1.9): the archiver shows it missing 25 of 41 purges and one flow-off, and reading mid-ramp values.
    Before relying on the flow-mismatch rule (5.1), confirm with the IOC owner whether the PV itself or only its archiving misses events. If the PV misses them, compare `Flow_RBV` against the value the sequencer last wrote instead.
 7. **Mode-B expected flow**: adopt the exponent n = 0.53 (5.2) or keep the linear rule and let the PID absorb the error.
 8. **Collimator-lid fast data**: no 10 s record exists for mode B. Capture one lift and one purge at 10 s (or 1 Hz) before finalising mode-B thresholds.
