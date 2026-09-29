@@ -120,11 +120,11 @@ authority; the user's decisions of 2026-09-28 are written into it.
 
 ## 4. Production install (Linux soft-IOC host, spec §11, §15)
 
-1. **Get the code there.** After step 3.10, `git clone` from GitHub; or copy a tarball of the `ioc/lssSampleGas` top. Put it at `<support>/ChemMat/lssSampleGas/` (its own top; the user decided this).
+1. **Get the code there** (2026-09-29, `docs/ioc/INSTALL.md` §1). Make a sparse `git clone` of the repo into `/home/chem_epics/chemmatCARS/synApps/support/ChemMat/lssSampleGas`, checking out only `ioc/lssSampleGas` and `ioc/screens`. The EPICS top is then `ChemMat/lssSampleGas/ioc/lssSampleGas`. Updates are `git pull` there. The user asked for a direct clone instead of copying.
 2. **No `configure/RELEASE.local` needed.** Since 2026-09-29, at the user's direction, `configure/RELEASE` carries the production host's real paths: `SUPPORT=/home/chem_epics/chemmatCARS/synApps/support`, base 7.0.8.1 at `/usr/local/epics/base`, seq R2-2-9, std R3-6-4, calc R3-7-5, asyn R4-44-2, autosave R5-11, sscan R2-11-6. `RELEASE.local.production.example` is only for a moved tree. No `CONFIG_SITE.local` is needed there: that is only for the bench's space-in-path problem.
-3. **Build:** `make` in the top (gcc 11.5, linux-x86_64). The code is plain C17, but it has never been compiled with gcc 11. Expect to fix small warnings; C23 features are not used.
+3. **Build:** `make` in the top (gcc 11.5, linux-x86_64). It builds without warnings with gcc 11.4 and the same module versions in WSL (`ioc/tools/linux_build_check.sh`). The user reports a `make` problem on the host whose error text is still to come.
 4. **The `start_ioc` table line** (the user or beamline staff add it):
-   `15LSS_sample_gas   20125   1  <support>/ChemMat/lssSampleGas/iocBoot/iocLSS_sample_gas/startLSSSampleGas`.
+   `15LSS_sample_gas   20125   1  /home/chem_epics/chemmatCARS/synApps/support/ChemMat/lssSampleGas/ioc/lssSampleGas/iocBoot/iocLSS_sample_gas/startLSSSampleGas`.
    Check that port 20125 is still free in `IOCLIST`.
 5. **First start:** `start_ioc 15LSS_sample_gas`. It acts from the start (writeEnable default 1). On the first start with no autosave file:
    - it reads 15IDC:Alicat1: and 15IDC:D1Dmm_calc;

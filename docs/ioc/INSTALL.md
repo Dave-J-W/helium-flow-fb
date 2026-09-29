@@ -1,204 +1,140 @@
 # Installing and testing 15LSS_sample_gas on the IOC host
 
-For the person installing and commissioning the IOC. `<support>` is the synApps support
-directory on the Linux soft-IOC host, `/home/chem_epics/chemmatCARS/synApps/support` (the
-default in `configure/RELEASE`); `<ioc-host>` is that host and `<user>` the IOC account.
 The IOC serves `15IDC:SampleGas:` and drives the Alicat `15IDC:Alicat1:` from the O2 reading
-`15IDC:D1Dmm_calc`.
+`15IDC:D1Dmm_calc`. It installs into the ChemMat area of the synApps tree:
+
+```bash
+C=/home/chem_epics/chemmatCARS/synApps/support/ChemMat
+```
 
 **Read this first.** A normal start (`start_ioc`) is *live*: if helium is already flowing (O2
-below 10 % and the Alicat setpoint above 0) it takes over the Alicat within a couple of seconds.
-The first start below is therefore a shadow start, which writes nothing. Stop the old Phoebus
-timer script before you switch to live: two writers fight over the setpoint.
+below 10 % and the Alicat setpoint above 0) it takes over the Alicat within seconds. So the first
+start below is a shadow start, which writes nothing. Stop the old Phoebus timer script before
+you switch to live: two writers fight over the setpoint.
 
-## 1. Get the code onto the IOC host
+## 1. Get the code
 
-The IOC is public at `https://github.com/Dave-J-W/helium-flow-fb` (branch `main`). The EPICS
-top is the repo's `ioc/lssSampleGas`; it goes to `<support>/ChemMat/lssSampleGas`.
-
-**A. From GitHub** (if the host reaches github.com):
+Clone only the IOC and its screens from GitHub:
 
 ```bash
-git clone https://github.com/Dave-J-W/helium-flow-fb.git ~/helium-flow-fb
-git -C ~/helium-flow-fb log -1 --oneline          # note the version you install
-mkdir -p <support>/ChemMat
-rsync -a ~/helium-flow-fb/ioc/lssSampleGas <support>/ChemMat/
+cd $C
+git clone --sparse --filter=blob:none \
+    https://github.com/Dave-J-W/helium-flow-fb.git lssSampleGas
+cd lssSampleGas
+git sparse-checkout set ioc/lssSampleGas ioc/screens
+git log -1 --oneline                        # the version you install
 ```
 
-**B. Without internet on the host:** make a package on the PC with the repo (Git Bash, in the
-repo worktree; the committed state is what gets packaged), then copy it over (e.g. `scp`):
+The IOC top is then `$C/lssSampleGas/ioc/lssSampleGas`, and the screens are in
+`$C/lssSampleGas/ioc/screens`. If git says `unknown option --sparse`, it is older than 2.27;
+leave out `--sparse --filter=blob:none` and the `sparse-checkout` line. That clones the whole
+repo (about 15 MB), and everything else stays the same.
+
+## 2. Build
 
 ```bash
-git -c core.autocrlf=false archive --format=tar.gz \
-    --prefix=lssSampleGas/ -o ~/lssSampleGas.tar.gz HEAD:ioc/lssSampleGas
-git -c core.autocrlf=false archive --format=zip \
-    -o ~/sampleGas_screens.zip HEAD:ioc/screens
-```
-
-and on the host:
-
-```bash
-cd <support>/ChemMat && tar xzf ~/lssSampleGas.tar.gz
-```
-
-Keep `-c core.autocrlf=false`. Archiving a subdirectory skips the repo's `.gitattributes`, so
-on a Windows checkout `git archive` would otherwise write CRLF line endings. A trailing `\r`
-(in `#!/bin/bash\r` or `EPICS_BASE=...\r`) breaks the start scripts and the build on Linux. A
-clone on the host (A) has no such problem.
-
-The screens are the repo's `ioc/screens/*.bob` (or `sampleGas_screens.zip`): copy them to
-wherever your Phoebus displays live (section 5).
-
-## 2. Configure (on the IOC host)
-
-Nothing to configure on the production host: `configure/RELEASE` already has its paths.
-`SUPPORT=/home/chem_epics/chemmatCARS/synApps/support`, base `/usr/local/epics/base`, and the
-module directories are seq R2-2-9 (as `sequencer-mirror-R2-2-9`), std R3-6-4, calc R3-7-5,
-asyn R4-44-2, autosave R5-11, sscan R2-11-6. That is the same layout as the ChemMat and
-LabJack tops in that tree. Only if the support tree has moved: copy
-`configure/RELEASE.local.production.example` to `configure/RELEASE.local` (gitignored) and
-adjust it; it is read last. Check the modules exist:
-
-```bash
-cd <support>
-ls -d sequencer-mirror-R2-2-9 std-R3-6-4 calc-R3-7-5 \
-      asyn-R4-44-2 autosave-R5-11 sscan-R2-11-6
-```
-
-## 3. Build
-
-```bash
+cd $C/lssSampleGas/ioc/lssSampleGas
 make 2>&1 | tee build.log
-ls -l bin/linux-x86_64/lssSampleGas iocBoot/iocLSS_sample_gas/envPaths
-```
-
-This is the first build with gcc on Linux (the bench is MinGW). Compiler warnings are
-expected; errors are not. If `make` stops with "Definition of ... conflicts with", the modules
-were built against different versions than `configure/RELEASE` says. Either correct
-`RELEASE`, or put `CHECK_RELEASE = WARN` into `configure/CONFIG_SITE.local` if you know the
-mix is fine.
-
-Then run the unit tests on the host. They take a few seconds and catch a C library that
-formats or rounds differently:
-
-```bash
-lssSampleGasApp/src/O.linux-x86_64/sgUnitTest | tail -1     # PASS: 44/44
+lssSampleGasApp/src/O.linux-x86_64/sgUnitTest | tail -1     # PASS: 45/45
 lssSampleGasApp/src/O.linux-x86_64/sgIocTest  | tail -1     # PASS: 30/30
-lssSampleGasApp/src/O.linux-x86_64/sgFmtTest  | tail -1
 ```
 
-## 4. First start: shadow, in a terminal
+No configuration is needed: `configure/RELEASE` already has this host's paths (base
+`/usr/local/epics/base`, seq R2-2-9, asyn R4-44-2, calc R3-7-5, sscan R2-11-6, std R3-6-4,
+autosave R5-11). The same versions build without warnings on gcc 11 (checked on Ubuntu
+22.04). If `make` fails, send the last 40 lines of `build.log`.
 
-Only one `15LSS_sample_gas` may run at a time: check it isn't already running under procServ.
-Then:
+## 3. First start: shadow, in a terminal
+
+Check that no `15LSS_sample_gas` is already running under procServ, then:
 
 ```bash
-cd <support>/ChemMat/lssSampleGas/iocBoot/iocLSS_sample_gas
+cd $C/lssSampleGas/ioc/lssSampleGas/iocBoot/iocLSS_sample_gas
 ./startLSSSampleGasTest
 ```
 
-This runs the production database in **shadow mode**, with the IOC console in this terminal
-(type `exit` to stop it). Its settings go to `autosave-test/`, so nothing from the test,
-including shadow mode, carries over to the production start. Expect, within a few seconds:
+This is the production IOC in **shadow mode**: it reads everything and writes nothing. The
+console is this terminal; type `exit` to stop it. Its settings go to `autosave-test/`, so
+nothing from the test carries over to the production start. Within a few seconds you should
+see:
 
 - `PV names: MFC 15IDC:Alicat1:, O2 15IDC:D1Dmm_calc, CYL none`
 - `start in shadow mode (FORCE_SHADOW): Par:writeEnable set to 0`
-- a state line, for example `— → IDLE (restart: setpoint is 0 (§4.7))`, or `→ REGULATE` if
-  helium was flowing (then it regulates in shadow and logs `shadow mode: would write ...`)
-- if instead you see `waiting for the Alicat PVs ...`, the Alicat IOC isn't up or its PVs have
-  other names; the controller waits and decides once they connect.
+- a state line, e.g. `— → IDLE (restart: setpoint is 0 (§4.7))`
 
-From another terminal:
+If you see `waiting for the Alicat PVs ...` instead, the Alicat IOC isn't up or its PV names
+differ; the controller keeps waiting and decides once they connect.
+
+From another terminal, compare with the O2 and Alicat panels you already have:
 
 ```bash
-P=15IDC:SampleGas:
-caget ${P}Sts:State ${P}Sts:O2 ${P}Sts:Flow ${P}Sts:SetpointRBV \
-      ${P}Sts:WriteEnable ${P}Sts:TickAge
-caget -S ${P}Sts:Banner
-cd <support>/ChemMat/lssSampleGas/iocBoot/iocLSS_sample_gas
-tail -f logs/sampleGas_15IDC_*.log
+caget 15IDC:SampleGas:Sts:O2 15IDC:SampleGas:Sts:Flow 15IDC:SampleGas:Sts:SetpointRBV
+caget 15IDC:SampleGas:Sts:State 15IDC:SampleGas:Sts:TickAge
 ```
 
-`Sts:O2`, `Sts:Flow` and `Sts:SetpointRBV` should match the O2 and Alicat panels you already
-have; `Sts:WriteEnable` 0 (shadow); `Sts:TickAge` 0 or 1.
+`Sts:TickAge` should be 0 or 1 (seconds since the controller last ticked).
 
-## 5. Screens
+## 4. Screens
 
-Unzip `sampleGas_screens.zip` into a folder next to your other displays and open
-`sampleGas_simple.bob` (everyday) or `sampleGas_main.bob` (full panel) with the macro
-`P=15IDC:SampleGas:`. The easiest way is an action button in one of your existing menu
-displays: "Open display" `sampleGas_simple.bob`, macros `P = 15IDC:SampleGas:`. The displays
-open each other (Full panel…, Admin…, Deep admin…) and pass `P` on.
-`docs/ioc/OPERATOR_GUIDE.md` explains every field and button.
+The displays are in `$C/lssSampleGas/ioc/screens`. Open `sampleGas_simple.bob` (everyday) or
+`sampleGas_main.bob` (full panel) with the macro `P=15IDC:SampleGas:`, e.g. from an action button
+in one of your menu displays ("Open display", macros `P = 15IDC:SampleGas:`). The displays open
+each other and pass `P` on. `docs/ioc/OPERATOR_GUIDE.md` in the repo explains every field.
 
-In shadow mode both panels show a SHADOW MODE badge.
+In shadow mode both panels show a SHADOW MODE badge and the banner shows the MAJOR
+`shadow mode: the controller is not writing to the Alicat`.
 
-## 6. Test sequence
+## 5. Test sequence
 
-Do it with helium available and the enclosure closed. Stop at any point with **Flow Zero** (the
-Alicat goes to 0 at once), or Admin → **Shadow (off)** (the controller stops writing and the
-Alicat keeps its flow).
+Have helium on and the enclosure closed. **Flow Zero** stops the helium at any point.
 
-1. **Shadow, as found.** Watch for a few minutes: readings match, no alarms you can't explain,
-   `Sts:TickAge` stays at 0–1. If it regulates in shadow, the log shows what it would write.
+1. **Watch in shadow** for a few minutes: readings match, `Sts:TickAge` stays 0–1.
 2. **Stop the old timer script.**
-3. **Go live:** Admin → **Live (on)** → confirm. Expect IDLE and `writes enabled: Alicat left at
-   <x> SLPM`. The valve doesn't move at the switch.
-4. **Take over:**
-   - if the box is already purged (O2 below 10 %), **Resume Flow**: REGULATE from the current
-     flow, no jump;
-   - otherwise **Purge**: PRECHECK, then PURGE at 20 SLPM, then the lid check passes within about
-     a minute, then HANDOFF and REGULATE. From air this took about 6–7 minutes on the bench.
-5. **Regulate** for as long as you like; the O2 should settle at the target (0.99 %) with the
-   in-range LED green. Try a target change if you want.
-6. **Flow Zero**: the Alicat goes to 0, state FLOW_ZERO.
-7. **Restart while regulating** (purge or Resume Flow first): type `exit` in the IOC terminal,
-   wait a minute, and run `./startLSSSampleGasTest` again. It comes back regulating in shadow
-   (this script always starts in shadow) from the flow the Alicat held. Admin → Live puts it in
-   IDLE; Resume Flow takes over again without a jump. The *live* restart, where it resumes
-   writing by itself, is the production start: test it after section 7 with
-   `start_ioc 15LSS_sample_gas` while regulating (or `exit` in its procServ console and start
-   it again).
-8. **Finish:** `exit`. The Alicat keeps its last setpoint; set it by hand or restart the old
-   script if you are not going on to production.
+3. **Go live:** Admin → **Live (on)** → confirm. It goes to IDLE; the valve doesn't move.
+4. **Take over:** **Purge** (from air: purge at 20 SLPM, lid check, handoff, regulation in about
+   6–7 minutes), or **Resume Flow** if the box is already purged (O2 below 10 %).
+5. **Regulate**: O2 settles at the target (0.99 %), in-range LED green.
+6. **Flow Zero**: the Alicat goes to 0.
+7. **Finish:** `exit` in the IOC terminal. The Alicat keeps its last setpoint.
 
-## 7. Production start
+## 6. Production start
 
-1. Ask for (or add) the `start_ioc` line; check port 20125 is still free in `IOCLIST`:
-   `15LSS_sample_gas   20125   1  <support>/ChemMat/lssSampleGas/iocBoot/iocLSS_sample_gas/startLSSSampleGas`
-2. Make sure the test IOC is stopped and the old timer script stays off.
-3. `start_ioc 15LSS_sample_gas`. This start is live and uses `autosave/`, not the test's
-   settings. With the setpoint at 0 it enters IDLE and waits for Purge or Resume Flow. With
-   helium flowing and the box purged, it resumes regulating at once.
-4. Alarm server: load `ioc/screens/sampleGas_alarms.xml` (production prefix). It includes
-   `Sts:Heartbeat` (IOC down) and `Sts:TickAge` (controller stalled). Give the archiver
+1. Add the `start_ioc` line (check port 20125 is free in `IOCLIST`). This prints it, with the
+   path written out, ready to paste as one line:
+
+   ```bash
+   echo "15LSS_sample_gas  20125  1" \
+        "$C/lssSampleGas/ioc/lssSampleGas/iocBoot/iocLSS_sample_gas/startLSSSampleGas"
+   ```
+2. Keep the old timer script off, and make sure the test IOC has exited.
+3. `start_ioc 15LSS_sample_gas`. It is live. With the Alicat at 0 it waits in IDLE for Purge or
+   Resume Flow; with helium flowing and the box purged it resumes regulating at once.
+4. Alarm server: load `ioc/screens/sampleGas_alarms.xml`. The archiver PV list is
    `ioc/screens/archive_pvs.txt`.
 
-procServ runs with `--noautorestart`: after a crash, restart it with `start_ioc`. The Alicat
-holds its last setpoint meanwhile, and the restart resumes without a bump.
+After a crash (procServ does not restart it), start it again with `start_ioc`; the Alicat holds
+its setpoint meanwhile and the restart resumes without a bump.
 
-## 8. Updating an installed IOC
+## 7. Updating
 
 ```bash
-git -C ~/helium-flow-fb pull
-git -C ~/helium-flow-fb log -1 --oneline
-rsync -a ~/helium-flow-fb/ioc/lssSampleGas <support>/ChemMat/
-cd <support>/ChemMat/lssSampleGas && make 2>&1 | tee build.log
+cd $C/lssSampleGas
+git pull
+cd ioc/lssSampleGas && make 2>&1 | tee build.log
 ```
 
-`rsync` without `--delete` keeps what the repo doesn't have: `configure/RELEASE.local`, the
-`autosave/` and `autosave-test/` settings, and `logs/`. Then restart the IOC to load the new
-build: `start_ioc 15LSS_sample_gas`, or `exit` in its console and start it again. The restart
-is bumpless. Without internet, repeat section 1B and unpack over the old copy, which also keeps
-those files.
+Then restart the IOC (`start_ioc 15LSS_sample_gas`, or `exit` in its console). `git pull` keeps
+the IOC's settings (`autosave/`) and logs; they are not in the repo.
 
 ## Troubleshooting
 
-| You see | Meaning / what to do |
+| You see | What to do |
 |---|---|
-| `waiting for the Alicat PVs (...): controller not acting yet` (MAJOR) | The Alicat IOC is down, or its PV names differ: `caget 15IDC:Alicat1:Setpoint_RBV`. Fix the names on Deep admin ("Alicat prefix", Apply) if needed. |
-| `not configured: Cfg:... is empty` | A PV name field on Deep admin is empty. |
-| `MFC gas table is ..., not He` (MINOR) | The Alicat's gas table isn't helium; the flow reading is wrong until it is. |
-| `flow mismatch: cylinder empty or MFC fault?` (MAJOR) | The flow doesn't follow the setpoint: cylinder valve, pressure, regulator. |
+| `waiting for the Alicat PVs (...): controller not acting yet` | The Alicat IOC is down, or its PV names differ: `caget 15IDC:Alicat1:Setpoint_RBV`. The names can be changed on Deep admin. |
+| `not configured: Cfg:... is empty` | A PV name on Deep admin is empty. |
+| `MFC gas table is ..., not He` | Set the Alicat's gas table to helium. |
+| `MFC flow units are ..., not SLPM` | Set the Alicat's flow units to SLPM. |
+| `flow mismatch: cylinder empty or MFC fault?` | The flow doesn't follow the setpoint: cylinder valve, pressure, regulator. |
+| `Alicat setpoint ... does not follow the controller` | A write was lost or something else writes the setpoint (the old timer script?). |
 | `controller not ticking` (red over the banner) | The IOC answers but the controller stopped: restart the IOC. |
-| Screens all magenta, fields show `<15IDC:SampleGas:...>` | The IOC isn't running, or Phoebus can't reach it (CA address list). |
+| Screens all magenta | The IOC isn't running, or Phoebus can't reach it (CA address list). |

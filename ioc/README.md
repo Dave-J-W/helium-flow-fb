@@ -94,21 +94,11 @@ parameter change goes into spec §9.1 / §13 too. Rebuild to install the new dat
 
 ## Install at the beamline (Linux soft-IOC host)
 
-Step by step, with the shadow-mode commissioning start (`startLSSSampleGasTest`) and a test
-sequence: [docs/ioc/INSTALL.md](../docs/ioc/INSTALL.md). In short:
-
-1. Put this top at `<support>/ChemMat/lssSampleGas/` (its own top), from GitHub or a tarball of
-   `ioc/lssSampleGas`.
-2. No configuration: `configure/RELEASE` has the production host's paths
-   (`SUPPORT=/home/chem_epics/chemmatCARS/synApps/support`, base `/usr/local/epics/base`, seq
-   R2-2-9, std R3-6-4, calc R3-7-5, asyn R4-44-2, autosave R5-11, sscan R2-11-6). Only for a
-   moved tree, a `configure/RELEASE.local` (see `RELEASE.local.production.example`).
-3. `make` in the top (gcc, `linux-x86_64`).
-4. Add the `start_ioc` line (check that the port is free in `IOCLIST`):
-   `15LSS_sample_gas   20125   1  <support>/ChemMat/lssSampleGas/iocBoot/iocLSS_sample_gas/startLSSSampleGas`
-5. **Stop the old timer script first:** two writers would fight over the setpoint.
-6. `start_ioc 15LSS_sample_gas`. It starts live (writes enabled). With the Alicat at 0 it enters
-   IDLE; if the Alicat IOC isn't up yet, it waits under a MAJOR alarm and acts once it connects.
-7. Load `screens/sampleGas_alarms.xml` into the alarm server; give the archiver
-   `screens/archive_pvs.txt`.
-8. Place the `.bob` files and open them with `P=15IDC:SampleGas:`.
+Follow [docs/ioc/INSTALL.md](../docs/ioc/INSTALL.md). In short:
+1. A sparse clone of this repo (only `ioc/lssSampleGas` and `ioc/screens`) goes into
+   `/home/chem_epics/chemmatCARS/synApps/support/ChemMat/lssSampleGas`.
+2. Run `make` in its `ioc/lssSampleGas`. `configure/RELEASE` already has the host's paths.
+3. Make a shadow-mode first start in a terminal (`startLSSSampleGasTest`), then the test
+   sequence.
+4. Add the `start_ioc` line (port 20125), then `start_ioc 15LSS_sample_gas`.
+5. To update: `git pull`, `make`, restart.
