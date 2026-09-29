@@ -35,9 +35,10 @@
    - Not thread-safe: every call on one sg_ctl from one thread (the SNL state set).
 
    Puts (io.put_setpoint / put_ramp / put_run) are requests: the glue's single gated put
-   function (spec §8.3, §8.20) drops them in shadow mode and while the MFC is disconnected. It
-   must treat the MFC as connected in the same tick as in.mfcConnected says so, or the
-   reconnect re-send of spec §8.18 (made inside sg_tick) is dropped.
+   function (spec §8.3, §8.20) drops them in shadow mode and while the MFC is disconnected (not
+   while it is only frozen, in.mfcStale). It must treat the MFC as connected in the same tick as
+   in.mfcConnected says so, or the reconnect re-send of spec §8.18 (made inside sg_tick) is
+   dropped.
    ============================================================================================ */
 #ifndef SGCORE_H
 #define SGCORE_H
@@ -56,10 +57,12 @@
 
 enum sg_state { SG_NONE = -1, SG_IDLE, SG_PRECHECK, SG_PURGE, SG_HANDOFF, SG_REGULATE,
                 SG_OPEN_LOOP, SG_FLOW_ZERO, SG_OPEN_STOP, SG_NSTATES };
-/* Order = PV list of spec §7.5 (Alm:*). PINNEDLOW exists only because enter() clears it. */
+/* Order = PV list of spec §7.5 (Alm:*). PINNEDLOW exists only because enter() clears it.
+   UNITS and SHADOW are not in the reference; the glue raises them (sgStart.c; spec §8.8, §8.20). */
 enum sg_alarm { SG_A_OPENSTOP, SG_A_PURGEINC, SG_A_O2BAD, SG_A_OPENLOOP, SG_A_OVERRIDE,
                 SG_A_HOLDSTUCK, SG_A_MISMATCH, SG_A_FLOWHIGH, SG_A_FLOWLOW, SG_A_PINNED,
-                SG_A_O2HIGH, SG_A_NOTREACHED, SG_A_CYLLOW, SG_A_GAS, SG_A_PINNEDLOW, SG_NALARMS };
+                SG_A_O2HIGH, SG_A_NOTREACHED, SG_A_CYLLOW, SG_A_GAS, SG_A_UNITS, SG_A_SHADOW,
+                SG_A_PINNEDLOW, SG_NALARMS };
 enum sg_event { SG_EV_PURGE = 1, SG_EV_ZERO = 2, SG_EV_CYLINDER = 3, SG_EV_NEWRUN = 4 };
 enum sg_lidres { SG_LID_PENDING, SG_LID_PASSED, SG_LID_SKIPPED, SG_LID_OPEN };
 
@@ -104,14 +107,27 @@ typedef struct {   /* spec §9.1, names = the Par:<key> suffixes; defaults in sg
    - running       Running_RBV (1 = running, 0 = on hold), last received value.
    - gas           Gas_RBV state string ("He" is correct), last received value.
    - mfcConnected  0 when any required Alicat channel of spec §6.1 is disconnected or Flow_RBV is
-                   INVALID, else 1 (spec §8.18). */
+                   INVALID, or Flow_RBV is frozen (mfcStale), else 1 (spec §8.18).
+   - mfcStale      1 when mfcConnected is 0 because Flow_RBV is frozen while the Alicat should be
+                   flowing (G3, spec §8.18): only the alarm and log texts differ. The glue keeps
+                   the gate open meanwhile (puts are still made; see "Puts" above).
+   - writeEnabled  1 while writes are enabled (the gate's Par:writeEnable, spec §8.20), 0 in shadow
+                   mode. Only the setpoint-follow check (spec §8.14) reads it: it never judges in
+                   shadow, where no write is made. The glue may correct it after the operator
+                   calls of the same tick (a Par:writeEnable switch). The replay sets 1 (the
+                   reference always writes); a zeroed struct means shadow. */
 typedef struct {
     double o2; int o2Sevr;
     double flow, sp, ramp, total;
     int running;
     char gas[40];
-    int mfcConnected;
+    int mfcConnected, mfcStale;
+    int writeEnabled;
 } sg_inputs;
+
+/* Sources of Alm:Mismatch (spec §8.14 "Mismatch sources"), highest first; the flow-mismatch check
+   is the lowest and runs only while none of these is on. */
+enum sg_mm { SG_MM_DISCONN, SG_MM_WRITE, SG_MM_NOCOMPUTE, SG_MM_FOLLOW, SG_MM_N };
 
 typedef struct {           /* effects; any pointer may be NULL */
     void *ctx;
@@ -176,7 +192,16 @@ typedef struct sg_ctl {
     /* spec §8.18, MFC disconnected (not in the reference); reset by sg_reinit and in IDLE */
     int mfcDisconnSec;     /* consecutive ticks with mfcConnected = 0 outside IDLE */
     int mfcDisconnAlarm;   /* 1 while the "MFC not responding" Mismatch alarm is raised */
+    int mfcDisconnStale;   /* ... raised for a frozen Flow_RBV (the recovery log text) */
     int badCmd;            /* ruling R12: 1 after an ignored non-finite command (logged once) */
+    /* Alm:Mismatch sources (spec §8.14; not in the reference); reset by sg_reinit and by an MFC
+       change (sg_channels_changed) */
+    int mmOn[SG_MM_N]; char mmMsg[SG_MM_N][SG_MSG];
+    int mmShown;           /* the source whose text Alm:Mismatch shows, -1 = none of them */
+    int followSec;         /* setpoint follow: consecutive ticks with Setpoint_RBV off lastCmd */
+    double followStep;     /* |lastCmd - the command before it| (SLPM): the Alicat ramps its
+                              Setpoint_RBV over followStep / RampRate s after lastCmdTime */
+    double nextFollowResend;
 } sg_ctl;
 
 /* One PID step for the epid record, from sg_pid_prepare. The glue:
@@ -217,7 +242,9 @@ void   sg_init(sg_ctl *c, const sg_io *io, double now);
      2. O2 valid, o2 < lidLevel and Setpoint_RBV > 0 -> REGULATE, lastCmd = Setpoint_RBV, FBON 1
      3. Setpoint_RBV <= 0                          -> IDLE "restart: setpoint is 0 (§4.7)"
      4. O2 not valid                               -> OPEN_LOOP "restart: O2 invalid (§4.7)"
-     5. otherwise                                  -> IDLE "restart: O2 above lid threshold (§4.7)"
+     5. otherwise (O2 valid, o2 >= lidLevel, Setpoint_RBV > 0) -> PRECHECK "restart: O2 above lid
+        threshold with the Alicat flowing: purge resumed" (G1, user decision 2026-09-29; the
+        reference enters IDLE here)
    "Not configured" (§8.15 step 0) and the connection wait (step 1) are the glue's. */
 void   sg_restart(sg_ctl *c, double now);
 
@@ -232,8 +259,15 @@ double sg_pid_bumpless_i(const sg_epid_cfg *cfg);     /* clamp(OUTL - KP*(VAL - 
                                                           PID:Out for the start step (NaN if OUTL
                                                           is NaN; OUTL if the P term is not finite) */
 void   sg_pid_done(sg_ctl *c, double oval);            /* epid.OVAL = oval; command(oval) if FBON.
-                                                          A non-finite oval is never commanded
-                                                          (ruling R12: logged MAJOR) */
+                                                          A non-finite oval (pass NaN for a failed
+                                                          epid process too) is never commanded
+                                                          and does not replace epid.OVAL; with
+                                                          FBON it raises the "cannot compute"
+                                                          Mismatch source (ruling R12, spec §8.3) */
+/* Spec §8.3, a failed Alicat put: failMsg = the alarm text ("MFC write failed: <PV> (pvStat <n>):
+   controller cannot act") while a put channel's last put failed, NULL once none is failing. The
+   glue calls it after each put (outside sg_tick); see sg_put_done in sgIoc.h. */
+void   sg_mfc_write_status(sg_ctl *c, const char *failMsg);
 
 /* ---------------------------------------------------------------- operator and admin */
 int    sg_op_purge(sg_ctl *c);                         /* return 1 if accepted */
@@ -253,7 +287,7 @@ void   sg_reset_override_count(sg_ctl *c);
    O2 changed -> clear o2hist, rateHist, avgBuf, sameCount, aboveCount, maxRate, frozen, lastO2;
    clear O2Bad silently. MFC changed -> reset the mismatch tracking (spSeen, spChangeT,
    flowAtSpChange), the hold-monitor counters, the §8.18 disconnect counters; clear Mismatch,
-   HoldStuck and Gas silently; lastTotal = cylBase = unset and the usage log cleared, so the next
+   HoldStuck, Gas and Units silently; lastTotal = cylBase = unset and the usage log cleared, so the next
    tick takes the new totalizer as its reference. */
 void   sg_channels_changed(sg_ctl *c, int o2Changed, int mfcChanged);
 

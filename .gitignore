@@ -7,3 +7,6 @@ analysis/J_rows.npy
 
 # local beamline CA address list (site IPs): never commit
 ioc/tools/beamline_env.local.sh
+
+# agent working files (briefs, reports, ledgers): local only
+.superpowers/

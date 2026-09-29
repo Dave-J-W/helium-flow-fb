@@ -69,9 +69,16 @@ double sg_pid_bumpless_i(const sg_epid_cfg *cfg)
 }
 
 /* processEpid after the record: OVAL back into the core; OUTL is written every cycle while FBON
-   (line 1480). */
+   (line 1480). A non-finite oval (the glue passes NaN for a failed epid process too) keeps the
+   last OVAL (the alarm checks and Sts:Progress read it) and, with FBON, goes to sg_command,
+   which refuses it and raises the "cannot compute" Mismatch source (spec §8.3, D4). The
+   reference's epid never returns one, so the replay does not reach this branch. */
 void sg_pid_done(sg_ctl *c, double oval)
 {
+    if (!isfinite(oval)) {
+        if (c->epid.FBON) sg_command(c, oval);
+        return;
+    }
     c->epid.OVAL = oval;
     if (c->epid.FBON) sg_command(c, oval);
 }

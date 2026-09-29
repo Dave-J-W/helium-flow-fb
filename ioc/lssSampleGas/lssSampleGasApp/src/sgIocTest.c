@@ -354,6 +354,98 @@ static int t_start_wait_alarm(void)
     return 0;
 }
 
+/* D2, D8 (spec §8.15 step 1, §8.20): Live switched on, or Release control pressed, during the
+   start-up wait: once the Alicat connects the decision enters IDLE, never REGULATE / OPEN_LOOP, and
+   commands nothing (the same inputs give REGULATE, or OPEN_LOOP with a put, through sg_restart).
+   The core's puts go through a real gate here, as in the IOC. */
+static sg_gate *G_;
+static void gSp(void *ctx, double v) { (void)ctx; sg_gate_request(G_, &C, SG_ACT_SP, v); }
+static void gRamp(void *ctx, double v) { (void)ctx; sg_gate_request(G_, &C, SG_ACT_RAMP, v); }
+static void gRun(void *ctx) { (void)ctx; sg_gate_request(G_, &C, SG_ACT_RUN, 1); }
+
+static int t_start_idle(void)
+{
+    const char *T = "S7 start-up wait: Live or Release control -> IDLE";
+    const char *LIVE = "restart: writes enabled during the start-up wait";
+    sg_inputs in;
+    sg_gate g;
+    sg_action a;
+    int raised = 0, i;
+    G_ = &g;
+    CHECK(T, sg_start_idle_reason(0, 0) == NULL, "reason without a press");
+    CHECK(T, sg_start_idle_reason(0, 1) && strcmp(sg_start_idle_reason(0, 1), LIVE) == 0,
+          "Live during the wait: '%s'", sg_start_idle_reason(0, 1) ? sg_start_idle_reason(0, 1) : "NULL");
+    CHECK(T, sg_start_idle_reason(1, 0) && strcmp(sg_start_idle_reason(1, 0), "admin released control") == 0,
+          "Release control during the wait");
+    CHECK(T, sg_start_idle_reason(1, 1) && strcmp(sg_start_idle_reason(1, 1), "admin released control") == 0,
+          "both: Release control first");
+    /* a shadow start (FORCE_SHADOW) waiting for the Alicat; Live is switched on meanwhile */
+    newCtl();
+    C.io.put_setpoint = gSp; C.io.put_ramp = gRamp; C.io.put_run = gRun;
+    sg_gate_init(&g, 0);
+    in = mkIn(0, NAN, 0.5, 0);
+    sg_set_inputs(&C, &in);
+    sg_start_wait_alarm(&C, &raised, "SIM:Alicat1:* (all Alicat channels)");
+    sg_gate_set_enable(&g, &C, 1, NAN);                  /* what syncWriteEnable does meanwhile */
+    /* the Alicat connects: regulating at 0.3 SLPM with O2 below the lid threshold */
+    in = mkIn(1, 0.3, 0.5, 0);
+    sg_set_inputs(&C, &in);
+    sg_gate_set_connected(&g, 1);
+    CHECK(T, sg_start_decision(1, &in) == SG_START_RESTART, "decision not RESTART");
+    sg_start_idle(&C, 1000, sg_start_idle_reason(0, 1));
+    CHECK(T, C.state == SG_IDLE, "state %s, want IDLE", sg_state_names[C.state]);
+    CHECK(T, countLog(0, "\xe2\x80\x94 \xe2\x86\x92 IDLE (restart: writes enabled during the start-up wait)") == 1,
+          "IDLE transition not logged");
+    CHECK(T, countLog(0, "IOC started (autosaved settings restored)") == 1, "start line missing");
+    CHECK(T, !C.alarms[SG_A_MISMATCH].active, "the wait alarm survived");
+    for (i = 0; i < 20; i++) { sg_set_inputs(&C, &in); sg_tick(&C, 1000 + i); }
+    CHECK(T, C.state == SG_IDLE && isnan(C.lastCmd) && C.epid.FBON == 0, "commanded: state %s lastCmd %g",
+          sg_state_names[C.state], C.lastCmd);
+    CHECK(T, sg_gate_next(&g, &a) == 0, "a put was queued (kind %d v %g)", a.kind, a.v);
+    /* Release control pressed during the wait of a live start; O2 invalid (sg_restart would give
+       OPEN_LOOP, which writes the expected flow at once) */
+    newCtl();
+    C.io.put_setpoint = gSp; C.io.put_ramp = gRamp; C.io.put_run = gRun;
+    sg_gate_init(&g, 1);
+    in = mkIn(1, 0.3, NAN, 3);
+    sg_set_inputs(&C, &in);
+    sg_gate_set_connected(&g, 1);
+    sg_start_idle(&C, 2000, sg_start_idle_reason(1, 0));
+    sg_tick(&C, 2000);
+    CHECK(T, C.state == SG_IDLE && countLog(0, "\xe2\x80\x94 \xe2\x86\x92 IDLE (admin released control)") == 1,
+          "Release control: state %s", sg_state_names[C.state]);
+    CHECK(T, sg_gate_next(&g, &a) == 0, "Release control: a put was queued (kind %d v %g)", a.kind, a.v);
+    return 0;
+}
+
+/* G3 (spec §8.18): Flow_RBV frozen for more than the limit while the Alicat should be flowing. */
+static int t_flow_stale(void)
+{
+    const char *T = "S8 frozen Flow_RBV";
+    sg_stale st;
+    double t;
+    memset(&st, 0, sizeof st);
+    for (t = 0; t <= 12000; t++)
+        CHECK(T, !sg_flow_stale(&st, t, 1, 100, 5, 1, SG_FLOW_STALE_S), "stale at %g s", t);
+    CHECK(T, sg_flow_stale(&st, 12001, 1, 100, 5, 1, SG_FLOW_STALE_S), "not stale after 12001 s");
+    CHECK(T, !sg_flow_stale(&st, 12002, 1, 100, 6, 1, SG_FLOW_STALE_S), "a new value did not end it");
+    CHECK(T, !sg_flow_stale(&st, 24002, 1, 100, 6, 1, SG_FLOW_STALE_S), "clock not restarted by it");
+    CHECK(T, sg_flow_stale(&st, 24003, 1, 100, 6, 1, SG_FLOW_STALE_S), "not stale again");
+    /* the flow off (setpoint 0 or on hold): not judged, and the clock restarts when it is back */
+    CHECK(T, !sg_flow_stale(&st, 24004, 1, 100, 6, 0, SG_FLOW_STALE_S), "judged with the flow off");
+    CHECK(T, !sg_flow_stale(&st, 30000, 1, 100, 6, 1, SG_FLOW_STALE_S), "clock not restarted by the "
+          "flow off");
+    CHECK(T, !sg_flow_stale(&st, 42000, 1, 100, 6, 1, SG_FLOW_STALE_S), "stale 12000 s after the restart");
+    CHECK(T, sg_flow_stale(&st, 42001, 1, 100, 6, 1, SG_FLOW_STALE_S), "not stale 12001 s after it");
+    /* disconnected (no value of this Alicat): that is §8.18's CA case, not this one */
+    CHECK(T, !sg_flow_stale(&st, 42002, 0, 100, 6, 1, SG_FLOW_STALE_S), "stale while disconnected");
+    CHECK(T, !sg_flow_stale(&st, 50000, 1, 100, 6, 1, SG_FLOW_STALE_S), "clock not restarted by the "
+          "disconnect");
+    CHECK(T, !sg_flow_stale(&st, 62000, 1, 100, 6, 1, SG_FLOW_STALE_S) &&
+             sg_flow_stale(&st, 62001, 1, 100, 6, 1, SG_FLOW_STALE_S), "limit after the reconnect");
+    return 0;
+}
+
 static int t_not_configured_alarm(void)
 {
     const char *T = "S3 not-configured alarm while writes are enabled";
@@ -370,6 +462,100 @@ static int t_not_configured_alarm(void)
     sg_set_alarm(&C, SG_A_MISMATCH, 2, "flow mismatch: cylinder empty or MFC fault?");
     sg_not_configured_alarm(&C, &raised, 0, "");
     CHECK(T, C.alarms[SG_A_MISMATCH].active, "cleared a Mismatch it had not raised");
+    return 0;
+}
+
+/* G2 (user decision 2026-09-29): shadow mode on a configured, started station is a MAJOR alarm;
+   cleared (logged) when writes are enabled, silently when the station stops running. */
+static int t_shadow_alarm(void)
+{
+    const char *T = "S4 shadow-mode alarm";
+    const char *MSG = "shadow mode: the controller is not writing to the Alicat";
+    int i;
+    newCtl();
+    for (i = 0; i < 3; i++) sg_shadow_alarm(&C, 1, 0);
+    CHECK(T, C.alarms[SG_A_SHADOW].active && C.alarms[SG_A_SHADOW].sev == 2 &&
+             strcmp(C.alarms[SG_A_SHADOW].msg, MSG) == 0, "Shadow MAJOR not raised");
+    CHECK(T, countLog(2, MSG) == 1 && nLog == 1, "not logged MAJOR exactly once (nLog %d)", nLog);
+    CHECK(T, sg_worst_sev(&C) == 2, "worst severity %d", sg_worst_sev(&C));
+    sg_shadow_alarm(&C, 1, 1);                            /* writes enabled */
+    CHECK(T, !C.alarms[SG_A_SHADOW].active, "not cleared by writes enabled");
+    CHECK(T, countLog(0, "cleared: shadow mode: the controller is not writing to the Alicat") == 1,
+          "the clear was not logged");
+    sg_shadow_alarm(&C, 1, 0);
+    CHECK(T, C.alarms[SG_A_SHADOW].active && countLog(2, MSG) == 2, "not raised again");
+    i = nLog;
+    sg_shadow_alarm(&C, 0, 0);                            /* not configured (or not started) */
+    CHECK(T, !C.alarms[SG_A_SHADOW].active && nLog == i, "not cleared silently off-station");
+    sg_shadow_alarm(&C, 0, 0);
+    CHECK(T, !C.alarms[SG_A_SHADOW].active && nLog == i, "raised while not running");
+    return 0;
+}
+
+/* D1a (spec §8.3): a failed Alicat put is a MAJOR Mismatch source while that channel's streak
+   lasts; the text names the first failing channel; MINOR once per streak and channel. */
+static int t_put_done(void)
+{
+    const char *T = "S6 failed Alicat puts";
+    static const char *const pv[3] = { "SIM:Alicat1:Setpoint", "SIM:Alicat1:RampRate",
+                                       "SIM:Alicat1:Run" };
+    const char *WS = "MFC write failed: SIM:Alicat1:Setpoint (pvStat -1): controller cannot act";
+    const char *WR = "MFC write failed: SIM:Alicat1:RampRate (pvStat 3): controller cannot act";
+    int stat[3] = { 0, 0, 0 };
+    newCtl();
+    sg_put_done(&C, stat, pv, SG_ACT_SP, 0);
+    CHECK(T, !C.alarms[SG_A_MISMATCH].active && nLog == 0, "alarm or log for a good put");
+    sg_put_done(&C, stat, pv, SG_ACT_SP, -1);
+    sg_put_done(&C, stat, pv, SG_ACT_SP, -1);
+    CHECK(T, C.alarms[SG_A_MISMATCH].active && C.alarms[SG_A_MISMATCH].sev == 2 &&
+             strcmp(C.alarms[SG_A_MISMATCH].msg, WS) == 0, "no MAJOR: '%s'", C.alarms[SG_A_MISMATCH].msg);
+    CHECK(T, countLog(2, WS) == 1, "MAJOR logged %d times", countLog(2, WS));
+    CHECK(T, countLog(1, "put to SIM:Alicat1:Setpoint failed (pvStat -1)") == 1, "MINOR not once");
+    sg_put_done(&C, stat, pv, SG_ACT_RAMP, 3);
+    CHECK(T, strcmp(C.alarms[SG_A_MISMATCH].msg, WS) == 0, "text not the first failing channel's");
+    CHECK(T, countLog(1, "put to SIM:Alicat1:RampRate failed (pvStat 3)") == 1, "RampRate MINOR");
+    sg_put_done(&C, stat, pv, SG_ACT_RUN, 0);                  /* another channel's good put */
+    CHECK(T, strcmp(C.alarms[SG_A_MISMATCH].msg, WS) == 0, "cleared by another channel's put");
+    sg_put_done(&C, stat, pv, SG_ACT_SP, 0);                   /* Setpoint works again */
+    CHECK(T, C.alarms[SG_A_MISMATCH].active && strcmp(C.alarms[SG_A_MISMATCH].msg, WR) == 0 &&
+             countLog(2, WR) == 1, "RampRate's failure not shown: '%s'", C.alarms[SG_A_MISMATCH].msg);
+    sg_put_done(&C, stat, pv, SG_ACT_RAMP, 0);
+    CHECK(T, !C.alarms[SG_A_MISMATCH].active, "not cleared when no channel fails");
+    {
+        char b[SG_MSG + 16];
+        snprintf(b, sizeof b, "cleared: %s", WR);
+        CHECK(T, countLog(0, b) == 1, "the clear was not logged");
+    }
+    sg_put_done(&C, stat, pv, SG_ACT_SP, -1);                  /* a new streak logs again */
+    CHECK(T, countLog(1, "put to SIM:Alicat1:Setpoint failed (pvStat -1)") == 2 && countLog(2, WS) == 2,
+          "a new streak not logged");
+    return 0;
+}
+
+/* D3: wrong Alicat flow units are a MAJOR alarm while they last (spec §8.8). */
+static int t_units_alarm(void)
+{
+    const char *T = "S5 flow-units alarm";
+    const char *MSG = "MFC flow units are SCCM, not SLPM";
+    int i;
+    newCtl();
+    sg_units_alarm(&C, "SLPM");
+    CHECK(T, !C.alarms[SG_A_UNITS].active && nLog == 0, "alarm or log for SLPM");
+    for (i = 0; i < 3; i++) sg_units_alarm(&C, "SCCM");
+    CHECK(T, C.alarms[SG_A_UNITS].active && C.alarms[SG_A_UNITS].sev == 2 &&
+             strcmp(C.alarms[SG_A_UNITS].msg, MSG) == 0, "Units MAJOR not raised");
+    CHECK(T, countLog(2, MSG) == 1 && nLog == 1, "not logged MAJOR exactly once (nLog %d)", nLog);
+    sg_units_alarm(&C, NULL);                             /* no reading: the level stays */
+    CHECK(T, C.alarms[SG_A_UNITS].active, "cleared without a reading");
+    sg_units_alarm(&C, "SLPM");
+    CHECK(T, !C.alarms[SG_A_UNITS].active &&
+             countLog(0, "cleared: MFC flow units are SCCM, not SLPM") == 1, "not cleared by SLPM");
+    sg_units_alarm(&C, "LPM");
+    CHECK(T, C.alarms[SG_A_UNITS].active && countLog(2, "MFC flow units are LPM, not SLPM") == 1,
+          "LPM not raised");
+    i = nLog;
+    sg_channels_changed(&C, 0, 1);                        /* §8.21 step 4: cleared silently */
+    CHECK(T, !C.alarms[SG_A_UNITS].active && nLog == i, "not cleared silently by an MFC change");
     return 0;
 }
 
@@ -710,7 +896,8 @@ int main(void)
         t_gate_enabled, t_gate_shadow, t_gate_enable_transitions,
         t_gate_drop_disconnected, t_gate_requeue_on_disable, t_gate_requeue_on_disconnect,
         t_gate_collapse, t_gate_run_and_nan, t_gate_init, t_gate_set_connected,
-        t_start_decision, t_start_wait_alarm, t_not_configured_alarm,
+        t_start_decision, t_start_wait_alarm, t_not_configured_alarm, t_shadow_alarm,
+        t_units_alarm, t_put_done, t_start_idle, t_flow_stale,
         t_cfg_reject_state, t_cfg_changed_o2, t_cfg_changed_mfc, t_cfg_unchanged,
         t_cfg_not_configured, t_cfg_empty_mfc, t_cfg_trim, t_cfg_he_save,
         t_logfile, t_logfile_month_boundary, t_logfile_write_error,

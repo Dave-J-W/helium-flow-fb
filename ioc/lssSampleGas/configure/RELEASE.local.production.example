@@ -1,5 +1,11 @@
-# Production: copy to configure/RELEASE.local on the Linux host (gitignored) and replace the
-# placeholder with the host's synApps support directory. The module versions and EPICS_BASE
-# are already set in configure/RELEASE (the production loadout, spec §11.2), so SUPPORT is the
-# only line needed here.
-SUPPORT=<synApps support dir>
+# Production: configure/RELEASE already has the production host's paths (SUPPORT, EPICS_BASE and
+# the six module directories), so the host normally needs NO configure/RELEASE.local.
+# Only if the support tree moves: copy this to configure/RELEASE.local (gitignored) and adjust.
+SUPPORT=/home/chem_epics/chemmatCARS/synApps/support
+EPICS_BASE=/usr/local/epics/base
+SNCSEQ=$(SUPPORT)/sequencer-mirror-R2-2-9
+ASYN=$(SUPPORT)/asyn-R4-44-2
+CALC=$(SUPPORT)/calc-R3-7-5
+SSCAN=$(SUPPORT)/sscan-R2-11-6
+STD=$(SUPPORT)/std-R3-6-4
+AUTOSAVE=$(SUPPORT)/autosave-R5-11

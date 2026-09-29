@@ -28,8 +28,9 @@
         MarkNewRun, ResetOverrideCount, Cfg:RestoreDefaults, Cfg:Apply; each reset to 0
      5. sg_tick (configured stations only: "runs no state machine", spec §8.21)
      6. PID step if due: sg_pid_prepare -> PID:Out = sg_pid_bumpless_i and ODEL 0 on the
-        record's FBON 0 -> 1 (first output = lastCmd) -> epid fields, PID:CVAL -> process PID -> OVAL (non-finite: MAJOR once, step skipped) ->
-        sg_pid_done
+        record's FBON 0 -> 1 (first output = lastCmd) -> epid fields, PID:CVAL -> process PID ->
+        OVAL (NaN if the process failed) -> sg_pid_done (a non-finite OVAL: nothing commanded,
+        the core's "cannot compute" Mismatch alarm, spec §8.3)
      7. PID:Out = lastCmd while FBON = 0 (spec §7.8, §8.3)
      8. publish: only what changed since the last tick (a last-published copy per PV); Alm:*
         before Sts:Banner / Sts:WorstSevr (spec §8.14); He:* arrays when the ledger or the usage
@@ -227,7 +228,7 @@ static const char *const inDefs[IN_N] = { SG_INS(IN_DEF) };
 /* enum sg_alarm order (sgCore.h, spec §7.5) */
 static const char *const almNames[SG_NALM] = {
     "OpenStop", "PurgeIncomplete", "O2Bad", "OpenLoop", "Override", "HoldStuck", "Mismatch",
-    "FlowHigh", "FlowLow", "Pinned", "O2High", "NotReached", "CylLow", "Gas"
+    "FlowHigh", "FlowLow", "Pinned", "O2High", "NotReached", "CylLow", "Gas", "Units", "Shadow"
 };
 static const char *const slotLetter[4] = { "A", "B", "C", "D" };
 
@@ -270,6 +271,9 @@ struct sg_station {
     /* clock */
     double tickNow, nextNow; int scheduled, clockBack, inTick;
     int started; long heartbeat;
+    int liveInWait, releaseInWait;      /* D2, D8: remembered during the start-up wait */
+    int caConnected;                    /* the Alicat's CA state this tick (the gate's flag) */
+    sg_stale flowStale;                 /* G3: Flow_RBV time-stamp clock */
     /* addresses */
     pubSlot pub[P_N], alm[SG_NALM], almMsg[SG_NALM];
     DBADDR in[IN_N];
@@ -277,7 +281,7 @@ struct sg_station {
     DBADDR modeF[4][SG_MAXMODEF], modeName[4];
     int nResolved, nMissing;
     /* state kept between ticks */
-    int ovalBad, unitsChecked, putFail[SG_NCO], logDirty;
+    int putFail[SG_NCO], logDirty;     /* putFail: last pvStat per put channel (sg_put_done) */
     int applyPending; double applyT;
     int heSave, havePubHe; long pubLedgerSeq;
     int mfcApplied, heRebase;           /* sg_cfg_he_save: Cfg:MFC changed this tick; 2nd save due */
@@ -609,8 +613,8 @@ static void setChanNames(sg_station *s, int o2, int mfc, int cyl)
             if (a->mfc[0] && writesPermitted(s)) snprintf(nm, sizeof nm, "%s%s", a->mfc, sfxO[i]);
             else nm[0] = '\0';
             chanRename(&s->ch[SG_GRP_OUT][i], nm);
+            s->putFail[i] = 0;                /* a new Alicat: no failure streak yet */
         }
-        s->unitsChecked = 0;
     }
 }
 
@@ -874,7 +878,8 @@ sg_station *sgIocCreate(const char *prefix, const char *logDir, const char *heli
         notConfiguredText(&s->active, status, sizeof status);
         pubTxt(&s->pub[CFG_STATUS], status);
         sg_log(&s->c, 1, "%s: station stays in IDLE", status);
-    } else sg_log(&s->c, 0, "waiting up to 30 s for the O2 and Alicat PVs to connect");
+    } else   /* spec §8.15 step 1: the Alicat wait has no time limit (D10) */
+        sg_log(&s->c, 0, "waiting for the O2 (up to 30 s) and Alicat PVs (no time limit) to connect");
     registerStation(s);
     return s;
 }
@@ -949,6 +954,17 @@ int sgIocReady(sg_station *s)
 
 int sgIocTouch(const void *a, const void *b) { (void)a; (void)b; return 1; }
 
+/* Once a second during the start-up connection wait (spec §8.15 step 1, up to 30 s): the program
+   is alive, so Sts:Heartbeat keeps changing and Sts:TickAge does not call it stalled (found in
+   the Linux smoke start, 2026-09-29). The tick clock counts from here: its reference moves to
+   this second, so the first tick after the wait is not taken for 30 s of missed ticks. */
+void sgIocWaitBeat(sg_station *s)
+{
+    s->heartbeat++;
+    s->tickNow = floor(wallNow());
+    pubNum(&s->pub[STS_HEARTBEAT], (double)s->heartbeat);
+}
+
 void sgIocWaitEnd(sg_station *s)
 {
     char list[512];
@@ -1003,7 +1019,16 @@ static void buildInputs(sg_station *s, sg_inputs *in)
     /* before any value: "running" (1), so a never-seen Alicat is not taken for one on hold */
     in->running = d[SG_CD_RUNNING].have ? d[SG_CD_RUNNING].lastV != 0 : 1;
     copyStr(in->gas, sizeof in->gas, gas->have ? gas->lastS : "(no reading)");
-    in->mfcConnected = mfcRequiredOk(s, 1) && d[SG_CD_FLOW].sevr < 3;
+    s->caConnected = mfcRequiredOk(s, 1) && d[SG_CD_FLOW].sevr < 3;
+    /* G3 (spec §8.18): Flow_RBV frozen while the Alicat should be flowing counts as not
+       responding for the core (alarm, re-send on recovery), but not for the gate: puts go on */
+    in->mfcStale = s->caConnected &&
+        sg_flow_stale(&s->flowStale, s->tickNow, d[SG_CD_FLOW].ok, d[SG_CD_FLOW].tsSec,
+                      d[SG_CD_FLOW].tsNsec,
+                      d[SG_CD_SP].ok && d[SG_CD_SP].lastV > 0 && in->running,
+                      fmax(SG_FLOW_STALE_S, s->c.p.frozenTime));
+    in->mfcConnected = s->caConnected && !in->mfcStale;
+    in->writeEnabled = s->g.writeEnable;       /* re-read after the tick's switch, sgIocTick */
 }
 
 /* Par:writeEnable transitions go through the gate only (sgIoc.h, spec §8.20). */
@@ -1017,9 +1042,15 @@ static void syncWriteEnable(sg_station *s)
         putD(&s->in[IN_WRITEEN], 0);
         logWriteRefusal(s);
         if (s->g.writeEnable) sg_gate_set_enable(&s->g, &s->c, 0, s->c.in.sp);
+        if (!s->started) s->liveInWait = 0;
         return;
     }
-    if (en != s->g.writeEnable) sg_gate_set_enable(&s->g, &s->c, en, s->c.in.sp);
+    if (en != s->g.writeEnable) {
+        sg_gate_set_enable(&s->g, &s->c, en, s->c.in.sp);
+        /* D2: a 0 -> 1 during the start-up wait makes the restart decision enter IDLE (a switch
+           back to shadow before the Alicat connects cancels it) */
+        if (!s->started) s->liveInWait = en;
+    }
 }
 
 static int takeCmd(sg_station *s, int idx)
@@ -1123,7 +1154,14 @@ static void commands(sg_station *s)
     if (takeCmd(s, IN_CMD_RESUME) && !rejectNotConfigured(s, "Resume Flow")
         && !sg_op_resume_flow(c, why, sizeof why))
         sg_log(c, 0, "%s", why);
-    if (takeCmd(s, IN_CMD_IDLE) && (s->started || !s->configured)) sg_op_idle(c);
+    if (takeCmd(s, IN_CMD_IDLE)) {
+        if (s->started || !s->configured) sg_op_idle(c);
+        else {                                  /* D8: the restart decision will enter IDLE */
+            s->releaseInWait = 1;
+            sg_log(c, 0, "Release control noted: the controller stays in IDLE when the Alicat "
+                         "PVs connect");
+        }
+    }
     if (takeCmd(s, IN_CMD_NEWCYL) && !rejectNotConfigured(s, "New He cylinder")) {
         sg_new_cylinder(c, "operator");
         s->heSave = 1;
@@ -1170,8 +1208,10 @@ static void epidStep(sg_station *s, const sg_epid_cfg *cfg)
         if (dbGet(&s->in[IN_PID_OVAL], DBR_DOUBLE, &oval, NULL, NULL, NULL)) oval = NAN;
     }
     dbScanUnlock(prec);
-    if (st) errlogPrintf("sampleGas: %s: epid configure/process failed (status %ld)\n",
-                         prec->name, st);
+    if (st) {
+        errlogPrintf("sampleGas: %s: epid configure/process failed (status %ld)\n", prec->name, st);
+        oval = NAN;              /* D4: not computed = not a number, which the core makes loud */
+    }
     if (cfg->FBON) s->pub[PID_OUT].have = 0;           /* epid owns PID:Out while FBON = 1 */
 
     /* While FBON = 0 devEpidSoft still recomputes OVAL (= P + the stale I), where the reference
@@ -1180,12 +1220,8 @@ static void epidStep(sg_station *s, const sg_epid_cfg *cfg)
        held OVAL back, as in the reference. With FBON = 0 sg_pid_done commands nothing. */
     if (!cfg->FBON) oval = c->epid.OVAL;
 
-    if (!isfinite(oval)) {                             /* ruling (parked from Plan 1) */
-        if (!s->ovalBad) sg_log(c, 2, "epid output is not a number");
-        s->ovalBad = 1;
-        return;
-    }
-    s->ovalBad = 0;
+    /* a non-finite OVAL is never commanded: sg_pid_done keeps the last one and raises the MAJOR
+       "controller cannot compute a flow" Mismatch source (spec §8.3, §8.11 step 5; D4) */
     sg_pid_done(c, oval);
 }
 
@@ -1200,12 +1236,13 @@ static void checkApply(sg_station *s)
     }
 }
 
-static void checkUnits(sg_station *s)         /* spec §8.8, optional: an alarm, never a refusal */
+/* spec §8.8: Alm:Units while FlowUnits_RBV is not SLPM (D3; an alarm, never a refusal). Every
+   tick of a running station; no reading of the current Alicat keeps the level. */
+static void checkUnits(sg_station *s)
 {
     sg_chan *u = &s->ch[SG_GRP_S][SG_CS_UNITS];
-    if (s->unitsChecked || !u->ok) return;
-    s->unitsChecked = 1;
-    if (strcmp(u->lastS, "SLPM") != 0) sg_log(&s->c, 2, "MFC flow units are %s, not SLPM", u->lastS);
+    if (!(s->configured && s->started)) return;
+    sg_units_alarm(&s->c, u->ok ? u->lastS : NULL);
 }
 
 /* ---------------------------------------------------------------- publish */
@@ -1402,7 +1439,7 @@ void sgIocTick(sg_station *s)
     s->heartbeat++;
 
     buildInputs(s, &in);                                                   /* 1 */
-    sg_gate_set_connected(&s->g, in.mfcConnected);
+    sg_gate_set_connected(&s->g, s->caConnected);   /* CA state: a frozen reading keeps puts */
     sg_set_inputs(c, &in);
     /* 2. On the first tick as at start (atStart = 1: values straight into c->p), so no operator
        call (sg_set_target / sg_set_mode) runs before the restart decision (fix round 1). */
@@ -1411,11 +1448,16 @@ void sgIocTick(sg_station *s)
         /* user direction 2026-09-28: no restart decision without the Alicat (sg_restart would
            park the controller in IDLE for good); wait, loudly and without a time limit */
         switch (sg_start_decision(s->configured, &in)) {
-        case SG_START_RESTART:
+        case SG_START_RESTART: {
+            /* D2, D8: Live switched on, or Release control pressed, during the wait -> IDLE */
+            const char *idle = sg_start_idle_reason(s->releaseInWait, s->liveInWait);
             if (s->waitAlarm) sg_log(c, 0, "Alicat PVs connected: running the restart decision");
             s->started = 1;
-            sg_restart(c, now);                        /* its reinit clears the wait alarm */
+            memset(s->putFail, 0, sizeof s->putFail);
+            if (idle) sg_start_idle(c, now, idle);    /* both reinit: the wait alarm clears */
+            else sg_restart(c, now);
             break;
+        }
         case SG_START_NOTCONF:
             s->started = 1;
             sg_reinit(c, now);
@@ -1437,11 +1479,15 @@ void sgIocTick(sg_station *s)
             sg_not_configured_alarm(c, &s->ncAlarm, s->g.writeEnable, t + strlen("not configured: "));
         } else sg_not_configured_alarm(c, &s->ncAlarm, 0, "");
     }
-    /* after the restart decision: a 0 -> 1 made during the connection wait enters IDLE (spec
-       §8.20, the valve stays where it is) instead of being overridden by a restart into
-       REGULATE, which would then write the PID output with no operator action */
+    /* after the restart decision: a 0 -> 1 seen in the decision's own tick (made during the SNL's
+       first 30 s) enters IDLE (spec §8.20, the valve stays where it is) instead of being
+       overridden by a restart into REGULATE; one made in an earlier tick of the wait for the
+       Alicat is remembered (liveInWait) and makes the decision itself enter IDLE (D2) */
     syncWriteEnable(s);
     commands(s);                                                           /* 4 */
+    /* a switch this tick (Par:writeEnable, or the PC trial's Cfg:MFC rule) holds for the whole
+       tick's setpoint-follow judgement (sgCore.h sg_inputs.writeEnabled) */
+    c->in.writeEnabled = s->g.writeEnable;
     if (s->configured && s->started) {
         sg_tick(c, now);                                                   /* 5 */
         if (sg_pid_due(c, now) && sg_pid_prepare(c, &cfg)) epidStep(s, &cfg);   /* 6 */
@@ -1450,6 +1496,8 @@ void sgIocTick(sg_station *s)
         if (isfinite(c->lastCmd)) pubNum(&s->pub[PID_OUT], c->lastCmd);
     } else s->pub[PID_OUT].have = 0;
     checkUnits(s);
+    /* G2: shadow mode on the banner and to the alarm server (spec §8.20) */
+    sg_shadow_alarm(c, s->configured && s->started, s->g.writeEnable);
     checkApply(s);
     publish(s);                                                            /* 8 */
     /* after a Cfg:MFC change the helium set is saved at once and at the new totalizer's first
@@ -1474,14 +1522,14 @@ int sgIocNextAction(sg_station *s, int *kind, double *v)
     return 1;
 }
 
+/* spec §8.3 (D1a): a failed put is a MAJOR Mismatch source while that channel's streak lasts */
 void sgIocPutDone(sg_station *s, int kind, int pvStat)
 {
+    const char *pv[SG_NCO];
+    int k;
     if (kind < 0 || kind >= SG_NCO) return;
-    if (pvStat != 0) {
-        if (!s->putFail[kind])
-            sg_log(&s->c, 1, "put to %s failed (pvStat %d)", s->ch[SG_GRP_OUT][kind].name, pvStat);
-        s->putFail[kind] = 1;
-    } else s->putFail[kind] = 0;
+    for (k = 0; k < SG_NCO; k++) pv[k] = s->ch[SG_GRP_OUT][k].name;
+    sg_put_done(&s->c, s->putFail, pv, kind, pvStat);
 }
 
 int sgIocNamesChanged(sg_station *s)

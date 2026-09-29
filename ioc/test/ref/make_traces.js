@@ -24,7 +24,12 @@
 //
 // Numbers are printed with String(v) (shortest round-trip), null as "null", NaN as "NaN".
 //
-// Usage: node make_traces.js [--html <simulator.html>] [--out <dir>] [--seed <n>] [--only <n,n,...>]
+// Usage: node make_traces.js [--html <simulator.html>] [--out <dir>] [--seed <n>] [--only <n,n,...>] [--no-noise]
+//
+// --no-noise sets the reference plant's analyzer white noise (pp.noise) and slow reading component
+// (pp.wanderRel) to 0, as the bench plant simulator's --no-noise does, and writes to golden/nonoise/
+// unless --out is given (spec §14.2 quantitative comparison). gauss() is still drawn, so the random
+// stream (e.g. a reseat) is the same as with noise on.
 
 'use strict';
 const fs = require('fs');
@@ -33,15 +38,17 @@ const vm = require('vm');
 
 // ---------------------------------------------------------------------------------------------- arguments
 const args = { html: path.join(__dirname, '..', '..', '..', 'simulator', 'sample_gas_simulator.html'),
-               out: path.join(__dirname, '..', 'golden'), seed: 12345, only: null };
+               out: null, seed: 12345, only: null, noise: true };
 for (let i = 2; i < process.argv.length; i++) {
   const a = process.argv[i], v = process.argv[i + 1];
   if (a === '--html') { args.html = v; i++; }
   else if (a === '--out') { args.out = v; i++; }
   else if (a === '--seed') { args.seed = Number(v); i++; if (!Number.isInteger(args.seed)) die(`bad --seed ${v}`); }
   else if (a === '--only') { args.only = v.split(',').map(Number); i++; }
+  else if (a === '--no-noise') { args.noise = false; }
   else die(`unknown argument ${a}`);
 }
+if (args.out === null) args.out = path.join(__dirname, '..', 'golden', ...(args.noise ? [] : ['nonoise']));
 function die(msg) { process.stderr.write(`make_traces: ${msg}\n`); process.exit(2); }
 
 // ---------------------------------------------------------------------------------------------- extract the reference
@@ -190,12 +197,26 @@ for (const name of Object.getOwnPropertyNames(Controller.prototype)) {
   Controller.prototype[name] = function (...a) {
     const top = recording && ctlDepth === 0 && this.st === station;
     if (top) beforeTop(name, this, a);
+    const sd = name === 'doPurge' && recording && this.st === station ? this.sd : null;
     ctlDepth++;
     let ret;
     try { ret = orig.apply(this, a); } finally { ctlDepth--; }
+    if (sd) noteLidCheck(this, sd);
     if (top) afterTop(name, this, a);
     return ret;
   };
+}
+
+// The lid-check decision (spec §8.9), for the --no-noise summary: doPurge keeps it in its state
+// data (sd), which a stopOpen replaces within the same call, hence the capture around doPurge.
+// Read-only: sd is never modified.
+let lidChecks = [];
+const lidSeen = new WeakSet();
+function noteLidCheck(ctl, sd) {
+  if (typeof sd.checkAt !== 'number' || lidSeen.has(sd)) return;
+  lidSeen.add(sd);
+  lidChecks.push({ t: ctl.now, ratio: sd.kin, curv: sd.curv, kObs: sd.kObs, onsetT: sd.onsetT, checkAt: sd.checkAt,
+                   cOn: sd.cOn, cCheck: sd.cCheck, o2Start: sd.o2Start, timerT0: sd.timerT0 });
 }
 
 function wrapPut(name, fmt) {
@@ -238,9 +259,15 @@ for (const { n, sc, T } of runs) {
   seedRng(args.seed); REF.resetGauss();
   const st = new Station('SELFTEST', 'TEST:SampleGas:', 'TEST:Alicat:', 'TEST:O2', '');
   st.silent = true;
+  if (!args.noise) {   // st.pp is the plant's own parameter object (Station constructor)
+    for (const k of ['noise', 'wanderRel']) {
+      if (typeof st.pp[k] !== 'number') die(`plant parameter ${k} missing from defaultPlantParams()`);
+      st.pp[k] = 0;
+    }
+  }
   const file = path.join(args.out, `sc${String(n).padStart(2, '0')}.trace`);
   openTrace(file);
-  station = st; lastS = null; lastX = null; lastH = null; expectResetEnter = false; recording = true;
+  station = st; lastS = null; lastX = null; lastH = null; expectResetEnter = false; lidChecks = []; recording = true;
   st.startScenario(sc);
   for (let k = 0; k < T.dur * STEPS_PER_S; k++) st.step();
   const tEnd = Math.round(st.t);
@@ -262,6 +289,7 @@ for (const { n, sc, T } of runs) {
   if (probs.length) fails++;
   station = null;
   summary[String(n)] = { state: st.ctl.state, selftest: probs.length ? probs : 'pass' };
+  if (!args.noise) Object.assign(summary[String(n)], { noise: false, seed: args.seed, lidChecks });
   const secs = ((Date.now() - t0) / 1000).toFixed(1);
   console.log(`sc${String(n).padStart(2, '0')}  ${String(st.ctl.state).padEnd(9)}  ${probs.length ? 'FAIL ' + probs.join('; ') : 'pass'}` +
               `  ${T.dur} s  ${nLines} lines  (${secs} s)`);

@@ -27,6 +27,13 @@ void sg_alarm_checks(sg_ctl *c);     /* sgChecks.c, reference alarmChecks (1403)
 void sg_ledger_update(sg_ctl *c);    /* sgLedger.c, reference ledgerUpdate (1219) */
 void sg_cyl_forecast(sg_ctl *c);     /* sgLedger.c, reference cylForecast (1279) */
 
+/* Alm:Mismatch sources (spec §8.14 "Mismatch sources", enum sg_mm), sgCore.c: the alarm shows the
+   highest active source; with none left it clears (silently if asked). sg_mm_set may be called
+   every tick (sg_set_alarm logs only a change). */
+void sg_mm_set(sg_ctl *c, int src, const char *msg);
+void sg_mm_clear(sg_ctl *c, int src, int silent);
+void sg_mm_reset(sg_ctl *c);         /* all sources off, without touching the alarm slot */
+
 /* Spec §8.18: true while the Alicat readings are stale (disconnected in a state that owns the
    flow): the flow mismatch check is skipped and sgCore.c's mfcLink owns the Mismatch alarm. */
 static inline int sg_mfc_lost(const sg_ctl *c) { return !c->in.mfcConnected && c->state != SG_IDLE; }

@@ -941,7 +941,8 @@ ALARM_DESCRIPTIONS = {
     "OpenLoop": "O2 unavailable: running blind at fixed flow (OPEN_LOOP)",
     "Override": "Controller overrode an MFC setting (see the Admin override log)",
     "HoldStuck": "MFC on hold and cannot be resumed",
-    "Mismatch": "Flow mismatch: cylinder empty or MFC fault?",
+    "Mismatch": "Alicat not doing what the controller asks (flow mismatch, setpoint not "
+                "followed, write failed, disconnected): controller may not be acting",
     "FlowHigh": "Helium flow above the expected flow: check the enclosure seal",
     "FlowLow": "PID demand below the expected flow: wrong enclosure mode selected?",
     "Pinned": "PID pinned at maximum flow: check the enclosure seal",
@@ -949,6 +950,8 @@ ALARM_DESCRIPTIONS = {
     "NotReached": "O2 target not reached within the settle timeout",
     "CylLow": "Helium cylinder forecast to run out soon",
     "Gas": "MFC gas table is not He (flow reading wrong)",
+    "Units": "MFC flow units are not SLPM (every flow reading and the helium ledger wrong)",
+    "Shadow": "Shadow mode: the controller is not writing to the Alicat",
 }
 assert set(ALARM_DESCRIPTIONS) == {n for n, _ in T.ALARM_TABLE}
 

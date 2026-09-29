@@ -300,8 +300,10 @@ class Bench:
     def watch(self, pv):
         """Monitor recorder: a live list of (wall time, value)."""
         rec = []
-        p = epics.PV(pv, auto_monitor=True)
-        p.add_callback(lambda value=None, **kw: rec.append((time.time(), value)))
+        # the callback goes in with the PV: on a channel pyepics already has connected (the same
+        # name used earlier in this process) the subscription, and its first event, happen inside
+        # PV(); a callback added afterwards can miss that event
+        p = epics.PV(pv, auto_monitor=True, callback=lambda value=None, **kw: rec.append((time.time(), value)))
         self._watches.append(p)
         return rec
 

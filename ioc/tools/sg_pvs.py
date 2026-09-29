@@ -174,7 +174,9 @@ assert sum(1 for p in PARAMS if p["level"] == "D") == 49
 MODE_FIELDS = [
     {"field": "baseFlow", "unit": "SLPM", "min": 0.01, "max": 20.0},
     {"field": "n", "unit": "–", "min": 0.1, "max": 3.0},
-    {"field": "KP", "unit": "SLPM/%", "min": -100.0, "max": 0.0},
+    # max -0.1, not 0: "KP must be negative" (spec 9.2, user decision 2026-09-29); KP = 0 would
+    # switch the feedback off without an alarm
+    {"field": "KP", "unit": "SLPM/%", "min": -100.0, "max": -0.1},
     {"field": "KI", "unit": "1/s", "min": 0.0, "max": 0.05},
     {"field": "drvh", "unit": "SLPM", "min": 0.1, "max": 20.0},
     {"field": "drvl", "unit": "SLPM", "min": 0.0, "max": 5.0},
@@ -212,8 +214,12 @@ ALARM_TABLE = [
     ("NotReached", "notReached"),
     ("CylLow", "cylLow"),
     ("Gas", "gas"),
+    # not in the reference (key: the name used in the code): spec 8.8 (D3) and 8.20 (G2, user
+    # decision 2026-09-29), raised by the glue (sgStart.c)
+    ("Units", "units"),
+    ("Shadow", "shadow"),
 ]
-assert len(ALARM_TABLE) == 14
+assert len(ALARM_TABLE) == 16
 
 # ---------------------------------------------------------------------------
 # Everything else in spec §7 (operator screen minus Par:target and Mode, admin commands, alarms,
@@ -301,7 +307,8 @@ _add("Sts:TickAge", "calc", {"SCAN": "1 second", "INPA": "$(P)Sts:Heartbeat NPP"
      tag="sts", desc="Seconds since the last tick")
 _add("Sts:HbLast", "calc", {"INPA": "$(P)Sts:Heartbeat NPP", "CALC": "A"}, tag="sts",
      desc="Heartbeat at the last TickAge scan")
-_add("Sts:Banner", "lsi", {"SIZV": 256}, tag="sts", desc="Active alarm texts")
+# SIZV 2048 (spec 7.1; D7 of the conformance audit): at 256 two or three alarm texts filled it
+_add("Sts:Banner", "lsi", {"SIZV": 2048}, tag="sts", desc="Active alarm texts")
 _add("Sts:WorstSevr", "mbbi", dict(_ALM_SEVR_FIELDS), tag="sts", desc="Worst active alarm",
      pini=True)
 _add("Sts:WriteEnable", "bi", {"ZNAM": "Shadow", "ONAM": "Live"}, tag="sts",

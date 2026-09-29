@@ -4,7 +4,7 @@ The plant simulator runs two plants (Bench(second_plant=True)): SIM:Alicat1: / S
 SIM:Alicat2: / SIM:O2b. The IOC starts on plant 1, is moved to plant 2 by Cfg:* + Cfg:Apply, and
 must then read and write plant 2 only. Every put the IOC makes to either Alicat is seen by a CA
 monitor on its writable PVs (Setpoint, RampRate, Run): the simulator never writes those itself,
-so each monitor event after the first (the value on connection) is a put. About 15 min.
+so each monitor event after the first (the value on connection) is a put. About 11 min.
 
     python -m unittest -v test_pvnames      (in ioc/test, bench Python, PYTHONIOENCODING=utf-8)
 

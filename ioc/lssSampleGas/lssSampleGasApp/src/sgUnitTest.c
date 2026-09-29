@@ -617,6 +617,60 @@ static int t_hold_resume_mismatch(void)
     return 0;
 }
 
+/* G3 (spec §8.18): a frozen Flow_RBV takes the not-responding path with its own texts. */
+static int t_mfc_frozen(void)
+{
+    const char *T = "G3 frozen Flow_RBV";
+    const char *MSG = "MFC not responding (Flow_RBV reading frozen)";
+    sg_inputs in = base(0.5);
+    double t;
+    newCtl();
+    CHECK(T, resumeFromIdle(&in, 0.5, 0.3) == 1, "resume refused");
+    in.mfcConnected = 0; in.mfcStale = 1;
+    for (t = 2; t <= 5; t++) tickO2(&in, 0.5, t);
+    CHECK(T, alarmIs(SG_A_MISMATCH, 2, MSG), "no MAJOR: '%s'", C.alarms[SG_A_MISMATCH].msg);
+    CHECK(T, countLog(2, MSG) == 1, "alarm log count %d", countLog(2, MSG));
+    nPutSp = 0;
+    in.mfcConnected = 1; in.mfcStale = 0;
+    tickO2(&in, 0.5, 6);
+    CHECK(T, !C.alarms[SG_A_MISMATCH].active && nPutSp == 1 && lastPutSp == 0.3, "recovery: alarm "
+          "'%s', %d put(s)", C.alarms[SG_A_MISMATCH].msg, nPutSp);
+    CHECK(T, countLog(0, "MFC readings updating again: setpoint 0.30 re-sent") == 1,
+          "recovery log missing");
+    CHECK(T, countLogSub("MFC reconnected") == 0, "logged as a CA reconnect");
+    return 0;
+}
+
+/* D6: the §8.18 reconnect re-send restarts the flow-mismatch timer, as the hold resume does
+   (§8.7): after an outage in which the Alicat's flow moved but its setpoint did not, the long
+   expired ramp allowance must not raise an instant MAJOR "flow mismatch". */
+static int t_reconnect_mismatch(void)
+{
+    const char *T = "D6 reconnect restarts the mismatch timer";
+    sg_inputs in = base(0.5);
+    double t;
+    newCtl();
+    sg_set_inputs(&C, &in);
+    sg_restart(&C, 10);
+    for (t = 10; t <= 30; t++) tickO2(&in, 0.5, t);
+    CHECK(T, C.state == SG_REGULATE && !C.alarms[SG_A_MISMATCH].active, "state %d", C.state);
+    in.mfcConnected = 0;
+    for (t = 31; t <= 40; t++) tickO2(&in, 0.5, t);
+    CHECK(T, alarmIs(SG_A_MISMATCH, 2, "MFC not responding (CA disconnected)"), "no disconnect alarm");
+    in.mfcConnected = 1; in.flow = 0;          /* back, with the flow down and the setpoint as it was */
+    for (t = 41; t <= 46; t++) {
+        tickO2(&in, 0.5, t);
+        CHECK(T, !C.alarms[SG_A_MISMATCH].active, "mismatch %g s after the reconnect: '%s'", t - 41,
+              C.alarms[SG_A_MISMATCH].msg);
+    }
+    CHECK(T, C.spChangeT == 41 && C.flowAtSpChange == 0, "timer %g flow %g", C.spChangeT,
+          C.flowAtSpChange);
+    tickO2(&in, 0.5, 47);                      /* 6 s > 5.3 s allowed, flow still 0 */
+    CHECK(T, alarmIs(SG_A_MISMATCH, 2, "flow mismatch: cylinder empty or MFC fault?"),
+          "no mismatch once the allowance is spent");
+    return 0;
+}
+
 /* R5 f: gas table not He → Gas MINOR in PRECHECK; cleared by the next PRECHECK with He. */
 static int t_gas(void)
 {
@@ -909,6 +963,46 @@ static int t_restart_mfc(void)
     return 0;
 }
 
+/* G1 (user decision 2026-09-29, spec §8.15 step 4): a restart with a valid O2 at or above
+   lidLevel and the Alicat flowing resumes the purge (PRECHECK, then PURGE at purgeFlow) instead
+   of a silent IDLE at up to 20 SLPM; with Setpoint_RBV 0 it stays IDLE. */
+static int t_restart_lid(void)
+{
+    const char *T = "G1 restart above the lid threshold";
+    const char *LOG = "— → PRECHECK (restart: O2 above lid threshold with the Alicat flowing: "
+                      "purge resumed)";
+    sg_inputs in = base(12);
+    newCtl();
+    in.sp = 20; in.flow = 20;
+    sg_set_inputs(&C, &in);
+    sg_restart(&C, 100);
+    CHECK(T, C.state == SG_PRECHECK && countLog(0, LOG) == 1, "state %d", C.state);
+    CHECK(T, nPutSp == 0, "put at the restart itself (%d)", nPutSp);
+    tickO2(&in, 12, 100);                          /* the restart's own tick: PRECHECK -> PURGE */
+    CHECK(T, C.state == SG_PURGE && C.sd.o2Start > 11.9, "state %d o2Start %g", C.state,
+          C.sd.o2Start);
+    CHECK(T, nPutSp == 1 && lastPutSp == 20 && C.lastCmd == 20, "purge flow: %d put(s), last %g",
+          nPutSp, lastPutSp);
+    CHECK(T, countLogSub("lid check") == 0, "lid check before the purge timer");
+    tickO2(&in, 12, 101);
+    CHECK(T, countLog(0, "lid check skipped: purge started at 12.00 % (< 18 %)") == 1,
+          "12 %% start: lid check not skipped");
+    /* setpoint 0: stays IDLE as before */
+    newCtl();
+    in = base(12); in.sp = 0; in.flow = 0;
+    sg_set_inputs(&C, &in);
+    sg_restart(&C, 200);
+    CHECK(T, C.state == SG_IDLE && countLog(0, "— → IDLE (restart: setpoint is 0 (§4.7))") == 1,
+          "setpoint 0: state %d", C.state);
+    /* O2 invalid at the same level: OPEN_LOOP as before (the invalid branch comes first) */
+    newCtl();
+    in = base(12); in.sp = 20; in.o2Sevr = 3;
+    sg_set_inputs(&C, &in);
+    sg_restart(&C, 300);
+    CHECK(T, C.state == SG_OPEN_LOOP, "O2 invalid: state %d", C.state);
+    return 0;
+}
+
 /* Ruling R12: a non-finite flow is never commanded (logged MAJOR once per episode); -0 becomes +0. */
 static int t_command_nan(void)
 {
@@ -933,6 +1027,209 @@ static int t_command_nan(void)
     sg_pid_done(&C, -0.0);
     CHECK(T, nPutSp == 2 && lastPutSp == 0 && !signbit(lastPutSp) && C.lastCmd == 0 && !signbit(C.lastCmd),
           "-0: puts %d put %g lastCmd %g", nPutSp, lastPutSp, C.lastCmd);
+    return 0;
+}
+
+/* "cleared: <msg>" */
+static int countCleared(const char *msg)
+{
+    char b[SG_MSG + 16];
+    snprintf(b, sizeof b, "cleared: %s", msg);
+    return countLog(0, b);
+}
+
+/* D1b (spec §8.14 "Setpoint follow"): a lost Flow Zero leaves the Alicat at its old setpoint;
+   after holdDetect + mismatchMargin s the MAJOR follow alarm is raised and lastCmd re-sent every
+   holdRetryInterval s; never judged in shadow mode, cleared silently in IDLE. */
+/* D1b with the Alicat's ramp: Setpoint_RBV reports the RAMPED setpoint (archive, 24 Sep: 0.43
+   then 20 over 7 s on a purge). A 20 SLPM step at 0.5 SLPM/s takes ~40 s: while the readback
+   ramps toward the command, no alarm; stuck, the MAJOR comes only after step/ramp + 8 s. */
+static int t_follow_ramp(void)
+{
+    const char *T = "D1b setpoint follow, slow ramp";
+    sg_inputs in;
+    double t, allowed;
+    int k;
+    for (k = 0; k < 2; k++) {                  /* k = 0 the readback ramps; k = 1 it is stuck */
+        newCtl();
+        in = base(0.5);
+        in.writeEnabled = 1;
+        in.ramp = 0.5;
+        CHECK(T, resumeFromIdle(&in, 0.5, 0.3) == 1, "resume refused");
+        sg_pid_done(&C, 20);                  /* the PID commands 20 SLPM at now = 1 */
+        CHECK(T, fabs(C.followStep - 19.7) < 1e-9, "followStep %g", C.followStep);
+        allowed = 19.7 / 0.5 + 3 + 5;          /* 47.4 s */
+        for (t = 2; t <= 48; t++) {
+            if (k == 0) in.sp = fmin(20, 0.3 + 0.5 * (t - 1));
+            in.flow = in.sp;                   /* the flow follows the readback: no flow mismatch */
+            tickO2(&in, 0.5, t);
+            CHECK(T, !C.alarms[SG_A_MISMATCH].active, "%s: alarm at %g s (allowed %g): '%s'",
+                  k ? "stuck" : "ramping", t - 1, allowed, C.alarms[SG_A_MISMATCH].msg);
+        }
+        tickO2(&in, 0.5, 49);                  /* 48 s after the command */
+        if (k == 0) CHECK(T, !C.alarms[SG_A_MISMATCH].active, "ramping: alarm after reaching 20");
+        else CHECK(T, C.alarms[SG_A_MISMATCH].active && C.alarms[SG_A_MISMATCH].sev == 2,
+                   "stuck: no MAJOR 48 s after the command");
+    }
+    return 0;
+}
+
+static int t_follow(void)
+{
+    const char *T = "D1b setpoint follow";
+    const char *MSG = "Alicat setpoint 0.30 SLPM does not follow the controller (0.00 SLPM): "
+                      "write lost or another writer";
+    sg_inputs in = base(0.5);
+    double t;
+    newCtl();
+    in.writeEnabled = 1;
+    CHECK(T, resumeFromIdle(&in, 0.5, 0.3) == 1, "resume refused");
+    sg_op_flow_zero(&C);                       /* its command(0) is lost: the Alicat stays at 0.3 */
+    CHECK(T, C.state == SG_FLOW_ZERO && C.lastCmd == 0, "state %d lastCmd %g", C.state, C.lastCmd);
+    nPutSp = 0;
+    for (t = 2; t <= 9; t++) tickO2(&in, 0.5, t);   /* 8 off ticks = holdDetect + mismatchMargin */
+    CHECK(T, !C.alarms[SG_A_MISMATCH].active && nPutSp == 0, "alarm or re-send within 8 s: '%s'",
+          C.alarms[SG_A_MISMATCH].msg);
+    tickO2(&in, 0.5, 10);
+    CHECK(T, alarmIs(SG_A_MISMATCH, 2, MSG), "no MAJOR after 9 s: '%s'", C.alarms[SG_A_MISMATCH].msg);
+    CHECK(T, countLog(2, MSG) == 1, "alarm log count %d", countLog(2, MSG));
+    CHECK(T, nPutSp == 1 && lastPutSp == 0, "re-send at the alarm: %d put(s), last %g", nPutSp,
+          lastPutSp);
+    for (t = 11; t <= 19; t++) tickO2(&in, 0.5, t);
+    CHECK(T, nPutSp == 1, "re-sent before holdRetryInterval (%d)", nPutSp);
+    tickO2(&in, 0.5, 20);
+    CHECK(T, nPutSp == 2 && lastPutSp == 0, "no re-send after holdRetryInterval (%d)", nPutSp);
+    CHECK(T, alarmIs(SG_A_MISMATCH, 2, MSG) && countLog(2, MSG) == 1 && countCleared(MSG) == 0,
+          "the flow check (flow = Setpoint_RBV) cleared or re-logged it");
+    in.sp = 0; in.flow = 0;                    /* the Alicat follows at last */
+    tickO2(&in, 0.5, 21);
+    CHECK(T, !C.alarms[SG_A_MISMATCH].active && countCleared(MSG) == 1, "not cleared (logged) "
+          "when followed");
+    /* shadow mode: never judged, no re-send */
+    newCtl();
+    in = base(0.5);
+    CHECK(T, resumeFromIdle(&in, 0.5, 0.3) == 1, "shadow: resume refused");
+    sg_op_flow_zero(&C);
+    nPutSp = 0;
+    for (t = 2; t <= 40; t++) tickO2(&in, 0.5, t);
+    CHECK(T, !C.alarms[SG_A_MISMATCH].active && nPutSp == 0, "shadow: alarm '%s' or %d put(s)",
+          C.alarms[SG_A_MISMATCH].msg, nPutSp);
+    /* IDLE: the controller does not own the flow; the alarm clears silently */
+    newCtl();
+    in = base(0.5);
+    in.writeEnabled = 1;
+    CHECK(T, resumeFromIdle(&in, 0.5, 0.3) == 1, "IDLE: resume refused");
+    sg_op_flow_zero(&C);
+    for (t = 2; t <= 10; t++) tickO2(&in, 0.5, t);
+    CHECK(T, alarmIs(SG_A_MISMATCH, 2, MSG), "IDLE: not raised first");
+    sg_op_idle(&C);
+    tickO2(&in, 0.5, 11);
+    CHECK(T, !C.alarms[SG_A_MISMATCH].active && countCleared(MSG) == 0, "IDLE: not cleared silently");
+    /* the hold-resume re-send restarts the count */
+    newCtl();
+    in = base(0.5);
+    in.writeEnabled = 1;
+    CHECK(T, resumeFromIdle(&in, 0.5, 0.3) == 1, "hold: resume refused");
+    sg_op_flow_zero(&C);
+    for (t = 2; t <= 6; t++) tickO2(&in, 0.5, t);        /* 5 off ticks */
+    in.running = 0;
+    for (t = 7; t <= 12; t++) tickO2(&in, 0.5, t);       /* on hold: not judged */
+    in.running = 1;
+    for (t = 13; t <= 20; t++) tickO2(&in, 0.5, t);      /* resume re-send, then 8 off ticks */
+    CHECK(T, !C.alarms[SG_A_MISMATCH].active, "hold: count not restarted: '%s'",
+          C.alarms[SG_A_MISMATCH].msg);
+    tickO2(&in, 0.5, 21);
+    CHECK(T, alarmIs(SG_A_MISMATCH, 2, MSG), "hold: no alarm 9 s after the resume");
+    return 0;
+}
+
+/* D4 (spec §8.3): a PID output or command that is not a number is on the banner while it lasts;
+   the next finite command clears it; a higher source (disconnect) shows over it; IDLE clears it
+   silently. */
+static int t_nocompute(void)
+{
+    const char *T = "D4 cannot compute a flow";
+    const char *MSG = "controller cannot compute a flow (PID output not a number): flow held at "
+                      "0.30 SLPM";
+    const char *MSG2 = "controller cannot compute a flow (PID output not a number): flow held at "
+                       "0.35 SLPM";
+    sg_inputs in = base(0.5);
+    double t;
+    newCtl();
+    CHECK(T, resumeFromIdle(&in, 0.5, 0.3) == 1 && C.epid.FBON == 1, "resume refused");
+    sg_pid_done(&C, NAN);
+    CHECK(T, alarmIs(SG_A_MISMATCH, 2, MSG), "no MAJOR: '%s'", C.alarms[SG_A_MISMATCH].msg);
+    CHECK(T, countLog(2, MSG) == 1, "alarm log count %d", countLog(2, MSG));
+    CHECK(T, C.epid.OVAL == 0.3, "OVAL %g, want the held 0.3", C.epid.OVAL);
+    for (t = 2; t <= 5; t++) tickO2(&in, 0.5, t);
+    sg_pid_done(&C, INFINITY);
+    CHECK(T, alarmIs(SG_A_MISMATCH, 2, MSG) && countLog(2, MSG) == 1 && countCleared(MSG) == 0,
+          "cleared or re-logged by the flow check");
+    in.mfcConnected = 0;                       /* a higher source shows over it ... */
+    for (t = 6; t <= 10; t++) tickO2(&in, 0.5, t);
+    CHECK(T, alarmIs(SG_A_MISMATCH, 2, "MFC not responding (CA disconnected)"), "disconnect not shown");
+    in.mfcConnected = 1;                       /* ... and hands back */
+    tickO2(&in, 0.5, 11);
+    CHECK(T, alarmIs(SG_A_MISMATCH, 2, MSG) && countLog(2, MSG) == 2, "not shown again after the "
+          "reconnect: '%s'", C.alarms[SG_A_MISMATCH].msg);
+    sg_pid_done(&C, 0.35);
+    CHECK(T, !C.alarms[SG_A_MISMATCH].active && countCleared(MSG) == 1, "not cleared by a finite output");
+    /* the command path: OPEN_LOOP commands expectedFlow every tick */
+    C.p.modes[0].baseFlow = NAN;
+    sg_enter(&C, SG_OPEN_LOOP, "test");
+    tickO2(&in, 0.5, 12);
+    CHECK(T, alarmIs(SG_A_MISMATCH, 2, MSG2), "OPEN_LOOP NaN: '%s'", C.alarms[SG_A_MISMATCH].msg);
+    C.p.modes[0].baseFlow = 0.25;
+    tickO2(&in, 0.5, 13);
+    CHECK(T, !C.alarms[SG_A_MISMATCH].active && countCleared(MSG2) == 1, "OPEN_LOOP finite: not cleared");
+    C.p.modes[0].baseFlow = NAN;
+    tickO2(&in, 0.5, 14);                      /* lastCmd is 0.25 now */
+    CHECK(T, alarmIs(SG_A_MISMATCH, 2, "controller cannot compute a flow (PID output not a number): "
+                     "flow held at 0.25 SLPM"), "OPEN_LOOP NaN again: '%s'", C.alarms[SG_A_MISMATCH].msg);
+    sg_op_idle(&C);
+    tickO2(&in, 0.5, 15);
+    CHECK(T, !C.alarms[SG_A_MISMATCH].active && countLogSub("cleared: controller cannot") == 2,
+          "IDLE: not cleared silently");
+    return 0;
+}
+
+/* D1a, core side (spec §8.3, §8.14): the write-failed source outranks the follow source and the
+   flow check; an MFC change resets every source. */
+static int t_write_fail(void)
+{
+    const char *T = "D1a write failed";
+    const char *W = "MFC write failed: SIM:Alicat1:Setpoint (pvStat -1): controller cannot act";
+    const char *F = "Alicat setpoint 0.30 SLPM does not follow the controller (0.00 SLPM): "
+                    "write lost or another writer";
+    sg_inputs in = base(0.5);
+    double t;
+    newCtl();
+    in.writeEnabled = 1;
+    CHECK(T, resumeFromIdle(&in, 0.5, 0.3) == 1, "resume refused");
+    sg_mfc_write_status(&C, W);
+    CHECK(T, alarmIs(SG_A_MISMATCH, 2, W) && countLog(2, W) == 1, "no MAJOR: '%s'",
+          C.alarms[SG_A_MISMATCH].msg);
+    for (t = 2; t <= 5; t++) tickO2(&in, 0.5, t);
+    CHECK(T, alarmIs(SG_A_MISMATCH, 2, W) && countCleared(W) == 0, "cleared by the flow check");
+    sg_op_flow_zero(&C);
+    for (t = 6; t <= 16; t++) tickO2(&in, 0.5, t);        /* the follow source comes on below it */
+    CHECK(T, alarmIs(SG_A_MISMATCH, 2, W) && countLog(2, F) == 0, "follow shown over the write "
+          "failure: '%s'", C.alarms[SG_A_MISMATCH].msg);
+    sg_mfc_write_status(&C, NULL);                        /* writes work again: follow shows */
+    CHECK(T, alarmIs(SG_A_MISMATCH, 2, F) && countLog(2, F) == 1, "follow not shown: '%s'",
+          C.alarms[SG_A_MISMATCH].msg);
+    in.sp = 0; in.flow = 0;
+    tickO2(&in, 0.5, 17);
+    CHECK(T, !C.alarms[SG_A_MISMATCH].active && countCleared(F) == 1, "not cleared");
+    sg_mfc_write_status(&C, W);
+    sg_channels_changed(&C, 0, 1);                        /* §8.21: every source reset */
+    tickO2(&in, 0.5, 18);
+    CHECK(T, !C.alarms[SG_A_MISMATCH].active && C.mmShown == -1, "the MFC change kept '%s'",
+          C.alarms[SG_A_MISMATCH].msg);
+    sg_mfc_write_status(&C, W);
+    sg_set_inputs(&C, &in);
+    sg_restart(&C, 100);                                  /* the restart too */
+    CHECK(T, !C.alarms[SG_A_MISMATCH].active && !C.mmOn[SG_MM_WRITE], "the restart kept it");
     return 0;
 }
 
@@ -1234,9 +1531,11 @@ int main(void)
     static int (*const tests[])(void) = {
         t_resume_idle, t_resume_idle_high, t_resume_invalid, t_resume_purge, t_set_mode,
         t_mark_new_run, t_mfc_disconnect, t_mfc_blip, t_resume_mfc, t_forecast_text, t_progress_text,
-        t_no_decay, t_purge_timeout, t_blind_purge, t_handoff_invalid, t_precheck_hold, t_hold_resume_mismatch, t_gas,
+        t_no_decay, t_purge_timeout, t_blind_purge, t_handoff_invalid, t_precheck_hold, t_hold_resume_mismatch,
+        t_reconnect_mismatch, t_mfc_frozen, t_gas,
         t_flow_high, t_flow_low, t_not_reached, t_pinned_low, t_cyl_low, t_total_backwards,
-        t_total_nan, t_ledger_disconnected, t_new_cylinder_disconnected, t_o2_nan, t_restart_mfc, t_command_nan,
+        t_total_nan, t_ledger_disconnected, t_new_cylinder_disconnected, t_o2_nan, t_restart_mfc, t_restart_lid,
+        t_command_nan, t_follow, t_follow_ramp, t_nocompute, t_write_fail,
         t_pid_bumpless, t_pid_bumpless_seed, t_channels_changed, t_channels_changed_midtick, t_helium_io, t_flow_steady, t_ledger_seq, t_cyl_minmax,
     };
     const int n = (int)(sizeof tests / sizeof tests[0]);

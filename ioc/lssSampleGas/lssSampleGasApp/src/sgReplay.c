@@ -426,6 +426,8 @@ static void doI(char *rest)
     in.ramp = num(tok[6]); in.total = num(tok[7]);
     snprintf(in.gas, sizeof in.gas, "%s", tok[8]);
     in.mfcConnected = 1;
+    in.writeEnabled = 1;                /* the reference always writes: the spec §8.14 setpoint-
+                                           follow check runs, and must never come on */
     sg_set_inputs(&ctl, &in);
 }
 
@@ -462,10 +464,17 @@ static void doC(long line, char *rest)
     } else report(line, "unknown command", "", name);
 }
 
+/* The spec §8.14 setpoint-follow check (not in the reference) runs in every trace: the longest run
+   of ticks with Setpoint_RBV off lastCmd is reported, so the margin to its alarm is visible. */
+static int followMax, followMaxAll, followJudged;
+
 static void doT(char *rest)
 {
     if (down) return;
     sg_tick(&ctl, num(rest) + timeOffset);
+    if (ctl.followSec > followMax) followMax = ctl.followSec;
+    if (ctl.in.writeEnabled && ctl.state != SG_IDLE && ctl.in.running && isfinite(ctl.lastCmd))
+        followJudged++;
 }
 
 /* The glue's contract (sgCore.h): on FBON 0 -> 1 it writes PID:Out = cfg.OUTL (= lastCmd) before
@@ -590,7 +599,7 @@ static int replayTrace(const char *path, long *diffsOut)
     sg_init(&ctl, &io, timeOffset);
     sg_epid_sim_reset(&esim);
     fHead = fCount = 0;                 /* drop sg_init's own "IOC started" line */
-    down = 0; nDiffs = 0; outlStarts = 0; outlDiffers = 0;
+    down = 0; nDiffs = 0; outlStarts = 0; outlDiffers = 0; followMax = 0;
     selftestSetup(scenarioNumber(path));
 
     while (fgets(line, sizeof line, f)) {
@@ -624,6 +633,7 @@ static int replayTrace(const char *path, long *diffsOut)
         printf("%s: note: cfg.OUTL (lastCmd) != Setpoint VAL at %ld of %ld bumpless starts\n", tag,
                outlDiffers, outlStarts);
     outlStartsAll += outlStarts; outlDiffersAll += outlDiffers;
+    if (followMax > followMaxAll) followMaxAll = followMax;
     if (nDiffs == 0 && stOk) printf("%s: PASS (%ld lines)\n", tag, ln);
     else printf("%s: FAIL (%ld differences in %ld lines%s)\n", tag, nDiffs, ln,
                 stOk ? "" : "; selftest failed");
@@ -688,6 +698,9 @@ int main(int argc, char **argv)
     }
     printf("sgReplay: %ld bumpless PID starts, cfg.OUTL != Setpoint VAL at %ld\n", outlStartsAll,
            outlDiffersAll);
+    printf("sgReplay: setpoint-follow check judged %d ticks; longest run of Setpoint_RBV off "
+           "lastCmd %d tick(s) (the alarm needs more than holdDetect + mismatchMargin)\n",
+           followJudged, followMaxAll);
     printf("sgReplay: %d/%d traces passed, %ld differences in total\n", nPass, nTraces, total);
     return nPass == nTraces ? 0 : 1;
 }

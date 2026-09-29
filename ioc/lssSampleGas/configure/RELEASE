@@ -3,13 +3,14 @@
 # IF YOU MAKE ANY CHANGES to this file you must subsequently do a "make rebuild" in this
 # application's top level directory.
 #
-# Laid out like the other standalone tops in the production synApps support tree (e.g.
-# LabJack-R3-0/configure/RELEASE): the module versions below ARE the production loadout
-# (spec §11.2). The one difference: SUPPORT is not set here, because its real path contains an
-# account name and this repository is public. Set it in configure/RELEASE.local (gitignored):
-#   production:  SUPPORT=<synApps support dir>            (see RELEASE.local.production.example)
-#   bench:       SUPPORT=/home/support, plus overrides of every module path below, because the
-#                bench build uses unversioned directory names (see RELEASE.local.example)
+# Laid out like the other tops in the ChemMatCARS synApps support tree (ChemMat/configure/RELEASE,
+# LabJack-R3-0/configure/RELEASE): the paths below ARE the production host's (spec §11.2), so a
+# build on that host needs no RELEASE.local. The user directed that the real paths be published
+# (build paths are routinely public in EPICS RELEASE files). Elsewhere, override them in
+# configure/RELEASE.local (gitignored), which is read last:
+#   bench (MinGW):  SUPPORT=/home/support and EPICS_BASE=/home/base-7.0.8.1, plus every module
+#                   path, because the bench uses unversioned directory names (RELEASE.local.example)
+#   WSL check:      written by ioc/tools/linux_build_check.sh
 # Variables may be used before their values are set; the -include lines at the end are read last.
 #
 # This file should ONLY define paths to other support modules, or include statements that pull
@@ -17,6 +18,8 @@
 
 TEMPLATE_TOP=$(EPICS_BASE)/templates/makeBaseApp/top
 
+# The production synApps support directory (as in its own configure/RELEASE)
+SUPPORT=/home/chem_epics/chemmatCARS/synApps/support
 -include $(TOP)/../configure/SUPPORT.$(EPICS_HOST_ARCH)
 
 # External modules required for building this IOC

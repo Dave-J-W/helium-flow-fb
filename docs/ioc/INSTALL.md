@@ -1,7 +1,8 @@
 # Installing and testing 15LSS_sample_gas on the IOC host
 
-For the person installing and commissioning the IOC. Placeholders: `<support>` is the synApps
-support directory on the Linux soft-IOC host, `<ioc-host>` that host, `<user>` the IOC account.
+For the person installing and commissioning the IOC. `<support>` is the synApps support
+directory on the Linux soft-IOC host, `/home/chem_epics/chemmatCARS/synApps/support` (the
+default in `configure/RELEASE`); `<ioc-host>` is that host and `<user>` the IOC account.
 The IOC serves `15IDC:SampleGas:` and drives the Alicat `15IDC:Alicat1:` from the O2 reading
 `15IDC:D1Dmm_calc`.
 
@@ -50,15 +51,13 @@ wherever your Phoebus displays live (section 5).
 
 ## 2. Configure (on the IOC host)
 
-```bash
-cd <support>/ChemMat/lssSampleGas
-cp configure/RELEASE.local.production.example configure/RELEASE.local
-nano configure/RELEASE.local           # set SUPPORT=<support>
-```
-
-`configure/RELEASE` already names the module versions: seq R2-2-9 (as
-`sequencer-mirror-R2-2-9`), std R3-6-4, calc R3-7-5, asyn R4-44-2, autosave R5-11, sscan
-R2-11-6, and base `/usr/local/epics/base`. Check they exist:
+Nothing to configure on the production host: `configure/RELEASE` already has its paths.
+`SUPPORT=/home/chem_epics/chemmatCARS/synApps/support`, base `/usr/local/epics/base`, and the
+module directories are seq R2-2-9 (as `sequencer-mirror-R2-2-9`), std R3-6-4, calc R3-7-5,
+asyn R4-44-2, autosave R5-11, sscan R2-11-6. That is the same layout as the ChemMat and
+LabJack tops in that tree. Only if the support tree has moved: copy
+`configure/RELEASE.local.production.example` to `configure/RELEASE.local` (gitignored) and
+adjust it; it is read last. Check the modules exist:
 
 ```bash
 cd <support>
@@ -83,8 +82,8 @@ Then run the unit tests on the host. They take a few seconds and catch a C libra
 formats or rounds differently:
 
 ```bash
-lssSampleGasApp/src/O.linux-x86_64/sgUnitTest | tail -1     # PASS: 38/38
-lssSampleGasApp/src/O.linux-x86_64/sgIocTest  | tail -1     # PASS: 24/24
+lssSampleGasApp/src/O.linux-x86_64/sgUnitTest | tail -1     # PASS: 44/44
+lssSampleGasApp/src/O.linux-x86_64/sgIocTest  | tail -1     # PASS: 30/30
 lssSampleGasApp/src/O.linux-x86_64/sgFmtTest  | tail -1
 ```
 

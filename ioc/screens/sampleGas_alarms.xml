@@ -44,7 +44,7 @@ changed and is MAJOR above 10 s (HIHI); its entry below annunciates that.
       <latching>false</latching>
     </pv>
     <pv name="15IDC:SampleGas:Alm:Mismatch">
-      <description>Flow mismatch: cylinder empty or MFC fault?</description>
+      <description>Alicat not doing what the controller asks (flow mismatch, setpoint not followed, write failed, disconnected): controller may not be acting</description>
       <enabled>true</enabled>
       <latching>false</latching>
     </pv>
@@ -80,6 +80,16 @@ changed and is MAJOR above 10 s (HIHI); its entry below annunciates that.
     </pv>
     <pv name="15IDC:SampleGas:Alm:Gas">
       <description>MFC gas table is not He (flow reading wrong)</description>
+      <enabled>true</enabled>
+      <latching>false</latching>
+    </pv>
+    <pv name="15IDC:SampleGas:Alm:Units">
+      <description>MFC flow units are not SLPM (every flow reading and the helium ledger wrong)</description>
+      <enabled>true</enabled>
+      <latching>false</latching>
+    </pv>
+    <pv name="15IDC:SampleGas:Alm:Shadow">
+      <description>Shadow mode: the controller is not writing to the Alicat</description>
       <enabled>true</enabled>
       <latching>false</latching>
     </pv>

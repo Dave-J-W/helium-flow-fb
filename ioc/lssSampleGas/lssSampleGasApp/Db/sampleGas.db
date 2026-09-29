@@ -681,7 +681,7 @@ record(ao, "$(P)Mode:A:KP") {
     field(EGU, "SLPM/%")
     field(PREC, "1")
     field(DRVL, "-100")
-    field(DRVH, "0")
+    field(DRVH, "-0.1")
     field(VAL, "-9.3")
     field(PINI, "YES")
 }
@@ -740,7 +740,7 @@ record(ao, "$(P)Mode:B:KP") {
     field(EGU, "SLPM/%")
     field(PREC, "1")
     field(DRVL, "-100")
-    field(DRVH, "0")
+    field(DRVH, "-0.1")
     field(VAL, "-10")
     field(PINI, "YES")
 }
@@ -799,7 +799,7 @@ record(ao, "$(P)Mode:C:KP") {
     field(EGU, "SLPM/%")
     field(PREC, "1")
     field(DRVL, "-100")
-    field(DRVH, "0")
+    field(DRVH, "-0.1")
     field(VAL, "-9.3")
     field(PINI, "YES")
 }
@@ -858,7 +858,7 @@ record(ao, "$(P)Mode:D:KP") {
     field(EGU, "SLPM/%")
     field(PREC, "1")
     field(DRVL, "-100")
-    field(DRVH, "0")
+    field(DRVH, "-0.1")
     field(VAL, "-9.3")
     field(PINI, "YES")
 }
@@ -1027,7 +1027,7 @@ record(calc, "$(P)Sts:HbLast") {
 
 record(lsi, "$(P)Sts:Banner") {
     field(DESC, "Active alarm texts")
-    field(SIZV, "256")
+    field(SIZV, "2048")
 }
 
 record(mbbi, "$(P)Sts:WorstSevr") {
@@ -1346,6 +1346,44 @@ record(mbbi, "$(P)Alm:Gas") {
 }
 
 record(lsi, "$(P)Alm:Gas:Msg") {
+    field(SIZV, "256")
+}
+
+record(mbbi, "$(P)Alm:Units") {
+    field(DESC, "key: units")
+    field(ZRST, "none")
+    field(ONST, "MINOR")
+    field(TWST, "MAJOR")
+    field(ZRVL, "0")
+    field(ONVL, "1")
+    field(TWVL, "2")
+    field(ZRSV, "NO_ALARM")
+    field(ONSV, "MINOR")
+    field(TWSV, "MAJOR")
+    field(VAL, "0")
+    field(PINI, "YES")
+}
+
+record(lsi, "$(P)Alm:Units:Msg") {
+    field(SIZV, "256")
+}
+
+record(mbbi, "$(P)Alm:Shadow") {
+    field(DESC, "key: shadow")
+    field(ZRST, "none")
+    field(ONST, "MINOR")
+    field(TWST, "MAJOR")
+    field(ZRVL, "0")
+    field(ONVL, "1")
+    field(TWVL, "2")
+    field(ZRSV, "NO_ALARM")
+    field(ONSV, "MINOR")
+    field(TWSV, "MAJOR")
+    field(VAL, "0")
+    field(PINI, "YES")
+}
+
+record(lsi, "$(P)Alm:Shadow:Msg") {
     field(SIZV, "256")
 }
 

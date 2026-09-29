@@ -40,14 +40,15 @@ and DLL.
 
 | Test | Command (PowerShell, repo root) | Expect |
 |---|---|---|
-| Core unit tests | `ioc\lssSampleGas\lssSampleGasApp\src\O.windows-x64-mingw\sgUnitTest.exe` | 38/38 |
-| Glue tests | `…\O.windows-x64-mingw\sgIocTest.exe` | 25/25 |
+| Core unit tests | `ioc\lssSampleGas\lssSampleGasApp\src\O.windows-x64-mingw\sgUnitTest.exe` | 44/44 |
+| Glue tests | `…\O.windows-x64-mingw\sgIocTest.exe` | 30/30 |
 | Replay against the reference, 19 scenarios, twice (also at epoch-time offsets) | `powershell -File ioc/tools/msys.ps1 ioc/tools/replay.sh` | 19/19, 0 differences |
 | Generators (db, screens, alarm XML) against the spec tables | `python -m unittest test_gen_db test_gen_screens` in `ioc/tools` | OK |
 | Generated files up to date | `python gen_db.py --check`, `python gen_screens.py --check` | up to date |
 | Plant simulator | `python -m unittest test_plant_model test_plant_server` in `ioc/test` | OK |
 | Heartbeat staleness, bench IOC + simulator (stops the controller with `seqStop`) | `python -m unittest -v test_tickage` in `ioc/test` | OK, about 2 min |
 | PV names (spec §14.3a), bench IOC + two-plant simulator | `python -m unittest -v test_pvnames` in `ioc/test` | OK, about 11 min |
+| Write enable, shadow mode and Resume Flow (spec §14.3b, §14.5 shadow check), bench IOC + simulator | `python -m unittest -v test_write_enable` in `ioc/test` | OK, about 4 min |
 | Scenario acceptance, real time, bench IOC + simulator | `$env:SG_SCENARIOS='2,3,8'; python -m unittest test_scenarios` in `ioc/test` | PASS; results in `ioc/test/results/` |
 
 Python is the bench venv (`%USERPROFILE%\.venvs\bluesky\Scripts\python.exe`) with
@@ -98,9 +99,10 @@ sequence: [docs/ioc/INSTALL.md](../docs/ioc/INSTALL.md). In short:
 
 1. Put this top at `<support>/ChemMat/lssSampleGas/` (its own top), from GitHub or a tarball of
    `ioc/lssSampleGas`.
-2. `configure/RELEASE.local`: copy `RELEASE.local.production.example` and set
-   `SUPPORT=<synApps support dir>`. `configure/RELEASE` lists the production versions (base
-   7.0.8.1, seq R2-2-9, std R3-6-4, calc R3-7-5, asyn R4-44-2, autosave R5-11, sscan R2-11-6).
+2. No configuration: `configure/RELEASE` has the production host's paths
+   (`SUPPORT=/home/chem_epics/chemmatCARS/synApps/support`, base `/usr/local/epics/base`, seq
+   R2-2-9, std R3-6-4, calc R3-7-5, asyn R4-44-2, autosave R5-11, sscan R2-11-6). Only for a
+   moved tree, a `configure/RELEASE.local` (see `RELEASE.local.production.example`).
 3. `make` in the top (gcc, `linux-x86_64`).
 4. Add the `start_ioc` line (check that the port is free in `IOCLIST`):
    `15LSS_sample_gas   20125   1  <support>/ChemMat/lssSampleGas/iocBoot/iocLSS_sample_gas/startLSSSampleGas`

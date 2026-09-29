@@ -42,6 +42,7 @@ typename sg_station *stn;   /* this instance's station: all controller state liv
 double dt;                  /* seconds to the next tick */
 int kind;
 double val;
+int waited;                 /* seconds of the start-up connection wait so far */
 
 ss ctl {
     state init {
@@ -62,7 +63,24 @@ ss ctl {
             sgIocWaitEnd(stn);
             dt = sgIocSecondsToNextTick(stn);
         } state tick
-        when (delay(30.0)) {                        /* ... 30 s: the missing ones are invalid */
+        when (delay(1.0)) {
+            waited = 1;
+            sgIocWaitBeat(stn);
+        } state wait
+    }
+
+    /* ... or 30 s, with a heartbeat every second meanwhile (Sts:TickAge, spec §13.4); a state of
+       its own so the self-transitions restart the 1 s delay without re-running init's entry */
+    state wait {
+        when (sgIocTouch(dIn, sIn) && ready()) {
+            sgIocWaitEnd(stn);
+            dt = sgIocSecondsToNextTick(stn);
+        } state tick
+        when (delay(1.0) && waited < 29) {
+            waited++;
+            sgIocWaitBeat(stn);
+        } state wait
+        when (delay(1.0)) {                         /* ... 30 s: the missing ones are invalid */
             feedInputs();
             sgIocWaitEnd(stn);
             dt = sgIocSecondsToNextTick(stn);

@@ -110,6 +110,7 @@ void sg_init(sg_ctl *c, const sg_io *io, double now)
     sg_default_params(&c->p);
     if (io) c->io = *io;
     c->in.o2 = NAN; c->in.o2Sevr = 3; c->in.running = 1; c->in.mfcConnected = 1;
+    c->in.writeEnabled = 1;
     snprintf(c->in.gas, sizeof c->in.gas, "He");
     c->overrideCount = 0; c->nOverride = 0;
     c->settleT0 = 0; c->inFine = 0;
@@ -132,13 +133,15 @@ void sg_reinit(sg_ctl *c, double now)
     c->o2 = NAN; c->o2ok = 0; c->lastO2 = NAN; c->sameCount = 0; c->frozen = 0;
     c->nO2 = 0; c->nRate = 0; c->maxRate = 0; c->aboveCount = 0; c->lidArmed = 0;
     c->nAvg = 0; c->blind = 0;
-    c->lastCmd = NAN; c->lastCmdTime = 0; c->flowAtCmd = 0;
+    c->lastCmd = NAN; c->lastCmdTime = 0; c->flowAtCmd = 0; c->followStep = 0;
     c->spSeen = NAN; c->spChangeT = 0; c->flowAtSpChange = 0;
     c->holdSec = 0; c->holdAttempts = 0; c->nextHoldAttempt = 0; c->holdRecovering = 0;
     c->pinnedSec = 0; c->pinnedLowSec = 0; c->heartbeat = 0;
     c->settling = 0; c->settleDir = 0; c->stallSec = 0; c->towardRate = 0; c->stallLatched = 0;
     c->nOval = 0; c->o2Slope = 0;
-    c->mfcDisconnSec = 0; c->mfcDisconnAlarm = 0; c->badCmd = 0; c->flowSteady = 0;
+    c->mfcDisconnSec = 0; c->mfcDisconnAlarm = 0; c->mfcDisconnStale = 0; c->badCmd = 0;
+    c->flowSteady = 0;
+    sg_mm_reset(c);
     c->epid.VAL = c->p.target; c->epid.CVAL = NAN; c->epid.KP = 0; c->epid.KI = 0;
     c->epid.DRVL = 0; c->epid.DRVH = 0; c->epid.ODEL = c->p.odel; c->epid.FBON = 0;
     c->epid.OVAL = 0;
@@ -159,10 +162,12 @@ void sg_channels_changed(sg_ctl *c, int o2Changed, int mfcChanged)
     if (mfcChanged) {
         c->spSeen = NAN; c->spChangeT = 0; c->flowAtSpChange = 0;
         c->holdSec = 0; c->holdAttempts = 0; c->nextHoldAttempt = 0; c->holdRecovering = 0;
-        c->mfcDisconnSec = 0; c->mfcDisconnAlarm = 0;
+        c->mfcDisconnSec = 0; c->mfcDisconnAlarm = 0; c->mfcDisconnStale = 0;
+        sg_mm_reset(c);                       /* every Mismatch source belonged to the old Alicat */
         sg_clear_alarm(c, SG_A_MISMATCH, 1);
         sg_clear_alarm(c, SG_A_HOLDSTUCK, 1);
         sg_clear_alarm(c, SG_A_GAS, 1);
+        sg_clear_alarm(c, SG_A_UNITS, 1);     /* the glue re-judges the new Alicat's units */
         c->lastTotal = NAN; c->cylBase = NAN; c->nCyl = 0;   /* re-baseline on the new totalizer */
         /* The glue calls this mid-tick, after sg_set_inputs: this tick's Total_RBV is still the
            old Alicat's. Drop it, or the ledger and the forecast baseline on it, and the new
@@ -188,13 +193,21 @@ double sg_expected_flow(const sg_ctl *c)
 void sg_command(sg_ctl *c, double v)
 {
     if (!isfinite(v)) {
+        char lb[64], msg[SG_MSG];
         if (!c->badCmd) sg_log(c, 2, "command ignored: flow value is not a number");
         c->badCmd = 1;
+        /* D4 (spec §8.3): on the banner while it lasts, not only in the log */
+        snprintf(msg, sizeof msg, "controller cannot compute a flow (PID output not a number): "
+                 "flow held at %s SLPM", sg_fmtN(lb, sizeof lb, c->lastCmd, 2));
+        sg_mm_set(c, SG_MM_NOCOMPUTE, msg);
         return;
     }
     c->badCmd = 0;
+    sg_mm_clear(c, SG_MM_NOCOMPUTE, 0);
     if (!(v > 0)) v = 0;                      /* negative and -0 -> +0 */
     if (isnan(c->lastCmd) || fabs(v - c->lastCmd) > 1e-9) {
+        /* the step the Alicat's setpoint ramps over (setpoint follow, §8.14) */
+        c->followStep = fabs(v - (isnan(c->lastCmd) ? c->in.sp : c->lastCmd));
         c->lastCmd = v; c->lastCmdTime = c->now; c->flowAtCmd = c->in.flow;
     }
     if (c->io.put_setpoint) c->io.put_setpoint(c->io.ctx, v);
@@ -403,6 +416,7 @@ static void holdMonitor(sg_ctl *c)
                it, but the unchanged Setpoint_RBV would not restart the flow-mismatch timer, whose
                ramp allowance has long expired; restart it here, as a setpoint change would. */
             c->spChangeT = c->now; c->flowAtSpChange = c->in.flow;
+            c->followSec = 0;                 /* the setpoint-follow count too (§8.14) */
             sg_clear_alarm(c, SG_A_HOLDSTUCK, 0);
             snprintf(msg, sizeof msg, "MFC was on hold, resumed; setpoint %s re-sent",
                      sg_fmtN(lb, sizeof lb, c->lastCmd, 2));
@@ -560,30 +574,88 @@ static void doHandoff(sg_ctl *c)
 static void mfcLink(sg_ctl *c)
 {
     static const char MSG[] = "MFC not responding (CA disconnected)";
+    static const char FROZEN[] = "MFC not responding (Flow_RBV reading frozen)";   /* G3 */
     if (c->state == SG_IDLE) {
-        if (c->mfcDisconnAlarm) sg_clear_alarm(c, SG_A_MISMATCH, 1);
-        c->mfcDisconnSec = 0; c->mfcDisconnAlarm = 0;
+        if (c->mfcDisconnAlarm) sg_mm_clear(c, SG_MM_DISCONN, 1);
+        c->mfcDisconnSec = 0; c->mfcDisconnAlarm = 0; c->mfcDisconnStale = 0;
         return;
     }
     if (!c->in.mfcConnected) {
         c->mfcDisconnSec++;
         if ((double)c->mfcDisconnSec > c->p.holdDetect) {
-            sg_set_alarm(c, SG_A_MISMATCH, 2, MSG);   /* logs only when it changes */
-            c->mfcDisconnAlarm = 1;
+            /* the highest source; logs only a change (e.g. frozen, then disconnected) */
+            sg_mm_set(c, SG_MM_DISCONN, c->in.mfcStale ? FROZEN : MSG);
+            c->mfcDisconnAlarm = 1; c->mfcDisconnStale = c->in.mfcStale;
         }
         return;
     }
     if (c->mfcDisconnSec > 0) {
         if (isfinite(c->lastCmd) && c->io.put_setpoint) c->io.put_setpoint(c->io.ctx, c->lastCmd);
+        /* D6: restart the flow-mismatch timer, as the hold resume does (§8.7): the flow may have
+           moved during the outage while Setpoint_RBV did not, and the ramp allowance has long
+           expired, which raised an instant MAJOR "flow mismatch" at the reconnect */
+        c->spChangeT = c->now; c->flowAtSpChange = c->in.flow;
+        c->followSec = 0;                     /* and the setpoint-follow count (§8.14) */
         if (c->mfcDisconnAlarm) {
             char lb[64];
-            sg_clear_alarm(c, SG_A_MISMATCH, 0);
-            if (isfinite(c->lastCmd))
+            sg_mm_clear(c, SG_MM_DISCONN, 0);     /* a lower active source shows next */
+            if (c->mfcDisconnStale) {
+                if (isfinite(c->lastCmd))
+                    sg_log(c, 0, "MFC readings updating again: setpoint %s re-sent",
+                           sg_fmtN(lb, sizeof lb, c->lastCmd, 2));
+                else sg_log(c, 0, "MFC readings updating again");
+            } else if (isfinite(c->lastCmd))
                 sg_log(c, 0, "MFC reconnected: setpoint %s re-sent", sg_fmtN(lb, sizeof lb, c->lastCmd, 2));
             else sg_log(c, 0, "MFC reconnected");
         }
     }
-    c->mfcDisconnSec = 0; c->mfcDisconnAlarm = 0;
+    c->mfcDisconnSec = 0; c->mfcDisconnAlarm = 0; c->mfcDisconnStale = 0;
+}
+
+/* ---------------------------------------------------------------- Alm:Mismatch sources
+   Spec §8.14 "Mismatch sources" (not in the reference: none of these ever comes on in the replay,
+   so mmShown stays -1 and the flow-mismatch check runs exactly as the reference's). */
+static void mmApply(sg_ctl *c, int silent)
+{
+    int i;
+    for (i = 0; i < SG_MM_N && !c->mmOn[i]; i++) {}
+    if (i < SG_MM_N) {
+        sg_set_alarm(c, SG_A_MISMATCH, 2, c->mmMsg[i]);   /* logs only a change */
+        c->mmShown = i;
+    } else if (c->mmShown >= 0) {
+        sg_clear_alarm(c, SG_A_MISMATCH, silent);
+        c->mmShown = -1;
+    }
+}
+
+void sg_mm_set(sg_ctl *c, int src, const char *msg)
+{
+    if (src < 0 || src >= SG_MM_N) return;
+    c->mmOn[src] = 1;
+    snprintf(c->mmMsg[src], sizeof c->mmMsg[src], "%s", msg);
+    mmApply(c, 0);
+}
+
+void sg_mm_clear(sg_ctl *c, int src, int silent)
+{
+    if (src < 0 || src >= SG_MM_N || !c->mmOn[src]) return;
+    c->mmOn[src] = 0;
+    mmApply(c, silent);
+}
+
+void sg_mm_reset(sg_ctl *c)
+{
+    int i;
+    for (i = 0; i < SG_MM_N; i++) { c->mmOn[i] = 0; c->mmMsg[i][0] = '\0'; }
+    c->mmShown = -1;
+    c->followSec = 0; c->nextFollowResend = 0;
+}
+
+/* D1a (spec §8.3): the glue's put results */
+void sg_mfc_write_status(sg_ctl *c, const char *failMsg)
+{
+    if (failMsg) sg_mm_set(c, SG_MM_WRITE, failMsg);
+    else sg_mm_clear(c, SG_MM_WRITE, 0);
 }
 
 /* ---------------------------------------------------------------- tick */
@@ -596,6 +668,10 @@ void sg_tick(sg_ctl *c, double now)
     readInputs(c);
     sg_expire_alarms(c);
     mfcLink(c);
+    if (c->state == SG_IDLE && c->mmOn[SG_MM_NOCOMPUTE]) {   /* D4: nothing is computed in IDLE */
+        c->badCmd = 0;
+        sg_mm_clear(c, SG_MM_NOCOMPUTE, 1);
+    }
     if (c->state != SG_IDLE) holdMonitor(c);
     if (!lidDetector(c)) {
         switch (c->state) {
@@ -631,12 +707,15 @@ void sg_restart(sg_ctl *c, double now)
     sg_log(c, 0, "IOC started (autosaved settings restored)");
     if (!in->mfcConnected || !isfinite(in->sp)) sg_enter(c, SG_IDLE, "restart: MFC not connected (§4.7)");
     else if (valid && in->o2 < p->lidLevel && in->sp > 0) {
-        c->lastCmd = in->sp; c->lastCmdTime = now; c->flowAtCmd = in->flow;
+        c->lastCmd = in->sp; c->lastCmdTime = now; c->flowAtCmd = in->flow; c->followStep = 0;
         sg_enter(c, SG_REGULATE, "restart: O2 valid and setpoint > 0, resume regulation (§4.7)");
         sg_config_epid(c); c->epid.FBON = 1;
     } else if (in->sp <= 0) sg_enter(c, SG_IDLE, "restart: setpoint is 0 (§4.7)");
     else if (!valid) sg_enter(c, SG_OPEN_LOOP, "restart: O2 invalid (§4.7)");
-    else sg_enter(c, SG_IDLE, "restart: O2 above lid threshold (§4.7)");
+    /* G1 (user decision 2026-09-29, beyond the reference, whose IDLE here left the Alicat at up
+       to purgeFlow with every check off and no alarm): purge again; the timeout bounds it and the
+       lid check stops the flow if the enclosure is open */
+    else sg_enter(c, SG_PRECHECK, "restart: O2 above lid threshold with the Alicat flowing: purge resumed");
 }
 
 /* ---------------------------------------------------------------- operator actions */
@@ -690,7 +769,7 @@ int sg_op_resume_flow(sg_ctl *c, char *why, size_t n)
             if (why && n) snprintf(why, n, "Resume Flow ignored: MFC not connected");
             return 0;
         }
-        c->lastCmd = c->in.sp; c->lastCmdTime = c->now; c->flowAtCmd = c->in.flow;
+        c->lastCmd = c->in.sp; c->lastCmdTime = c->now; c->flowAtCmd = c->in.flow; c->followStep = 0;
         c->epid.OVAL = c->lastCmd;
         sg_enter(c, SG_REGULATE, "operator pressed Resume Flow");
         sg_config_epid(c); c->epid.FBON = 1;

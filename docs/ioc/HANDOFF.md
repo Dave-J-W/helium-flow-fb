@@ -84,6 +84,10 @@ authority; the user's decisions of 2026-09-28 are written into it.
    - pidfile and duplicate guard
    - the interactive console under `run_ioc_pc.sh`
 3. **Quantitative comparison and restart/PV-name/write-enable tests** (Plan 4 Tasks 3-4; spec §14.2-§14.3b).
+   - **Task 4 done 2026-09-29:** `ioc/test/test_pvnames.py` (§14.3a) and `test_write_enable.py` (§14.3b + §14.5): OK. They take 877 s together. Report: `.superpowers/sdd/2026-09-25-ioc-plan4-acceptance/task-4-report.md`.
+   - **IOC defect found and fixed:** after a Cfg:MFC change, a restart before the next 300 s helium autosave restored the old Alicat's totalizer state (+115.7 L on the bench). The fix saves at once (`a8d0c0b`, glue test C8, sgIocTest 25/25).
+   - **Harness fix:** `Bench.watch` (`6e30c09`).
+   - **Still open:** Task 3, the noise-free quantitative comparison with the reference.
 4. **Heartbeat staleness: done 2026-09-29.**
    - `Sts:TickAge` (calc, SCAN 1 second, `A#B?0:C+1`, HIHI 10 MAJOR) plus `Sts:HbLast` (the previous heartbeat, updated by TickAge's FLNK), in `sg_pvs.py`.
    - TickAge is in both alarm XMLs. A red "controller not ticking" overlay covers the banner on both panels when TickAge > 10.
@@ -99,7 +103,7 @@ authority; the user's decisions of 2026-09-28 are written into it.
    - `docs/ioc/OPERATOR_GUIDE.md`: screens, tasks, states, alarms, shadow mode, IOC down, Admin, Deep admin; screenshots in `docs/ioc/img/`.
    - The screenshots are made by `ioc/test/doc_session.py`, which runs the bench and `ioc/tools/doc_screens.py`. The latter runs its own Phoebus instances, one per display, on ports 4994–4997, placed on a portrait monitor if there is one. It never saves a shot that shows the Phoebus frame, whose status bar shows the account name.
    - Rerun the session after any screen change. The confirmation dialogs aren't captured; the guide quotes them.
-7. **`ioc/HARDWARE_TEST.md`** (Plan 2 Task 6 Step 4): the gas-on procedure with the user.
+7. **Gas-on test procedure** (Plan 2 Task 6 Step 4). It is now `docs/ioc/INSTALL.md` §6, for the IOC host, so no separate `ioc/HARDWARE_TEST.md` is needed. The items below, beyond the basic sequence, are still for the user to choose.
    - Purge from air → handoff → regulation.
    - Flow Zero.
    - Restart in REGULATE: a bumpless resume.
@@ -117,7 +121,7 @@ authority; the user's decisions of 2026-09-28 are written into it.
 ## 4. Production install (Linux soft-IOC host, spec §11, §15)
 
 1. **Get the code there.** After step 3.10, `git clone` from GitHub; or copy a tarball of the `ioc/lssSampleGas` top. Put it at `<support>/ChemMat/lssSampleGas/` (its own top; the user decided this).
-2. **`configure/RELEASE.local`:** copy `RELEASE.local.production.example` and set `SUPPORT=<synApps support dir>`. `configure/RELEASE` already lists the production versions (base 7.0.8.1, seq R2-2-9, std R3-6-4, calc R3-7-5, asyn R4-44-2, autosave R5-11, sscan R2-11-6). No `CONFIG_SITE.local` is needed there: that is only for the bench's space-in-path problem.
+2. **No `configure/RELEASE.local` needed.** Since 2026-09-29, at the user's direction, `configure/RELEASE` carries the production host's real paths: `SUPPORT=/home/chem_epics/chemmatCARS/synApps/support`, base 7.0.8.1 at `/usr/local/epics/base`, seq R2-2-9, std R3-6-4, calc R3-7-5, asyn R4-44-2, autosave R5-11, sscan R2-11-6. `RELEASE.local.production.example` is only for a moved tree. No `CONFIG_SITE.local` is needed there: that is only for the bench's space-in-path problem.
 3. **Build:** `make` in the top (gcc 11.5, linux-x86_64). The code is plain C17, but it has never been compiled with gcc 11. Expect to fix small warnings; C23 features are not used.
 4. **The `start_ioc` table line** (the user or beamline staff add it):
    `15LSS_sample_gas   20125   1  <support>/ChemMat/lssSampleGas/iocBoot/iocLSS_sample_gas/startLSSSampleGas`.

@@ -20,6 +20,49 @@ static double histMean(const sg_ctl *c, int end, double A)
     return s / A;
 }
 
+/* Setpoint follow (spec §8.14, D1b of the conformance audit; not in the reference, whose Alicat
+   always follows: the replay runs it with writeEnabled = 1 and it never comes on there). The
+   flow-mismatch check below compares Flow_RBV with the Alicat's OWN Setpoint_RBV, so a lost
+   put (a one-shot Flow Zero, the purge entry), a device write that failed behind a good CA put,
+   or a second writer looked healthy. Judged only with writes enabled, outside IDLE, the Alicat
+   running and connected; more than holdDetect + mismatchMargin consecutive ticks with
+   Setpoint_RBV off lastCmd, and more than the Alicat's ramp time for the last step
+   (followStep / RampRate_RBV) plus that margin since the command, raise the MAJOR source and
+   re-send lastCmd at once and every holdRetryInterval s. The ramp allowance matters: the
+   Alicat's Setpoint_RBV reports the ramped setpoint (archive of 24 Sep: 0.43 then 20 over 7 s
+   on a purge), so a 20 SLPM step at a slow ramp rate takes longer than the fixed margin. */
+static void followCheck(sg_ctl *c)
+{
+    const sg_params *p = &c->p;
+    const sg_inputs *r = &c->in;
+    if (!(r->writeEnabled && c->state != SG_IDLE && r->running && r->mfcConnected &&
+          isfinite(c->lastCmd) && isfinite(r->sp))) {
+        c->followSec = 0; c->nextFollowResend = 0;
+        sg_mm_clear(c, SG_MM_FOLLOW, 1);
+        return;
+    }
+    if (!(fabs(r->sp - c->lastCmd) > sg_jmax(p->mismatchAbs, p->mismatchFrac * c->lastCmd))) {
+        c->followSec = 0; c->nextFollowResend = 0;
+        sg_mm_clear(c, SG_MM_FOLLOW, 0);
+        return;
+    }
+    c->followSec++;
+    if (!((double)c->followSec > p->holdDetect + p->mismatchMargin)) return;
+    if (!(c->now - c->lastCmdTime > (r->ramp > 0 ? c->followStep / r->ramp : 0)
+                                    + p->holdDetect + p->mismatchMargin)) return;
+    if (!c->mmOn[SG_MM_FOLLOW]) {             /* the text as first raised (not re-logged) */
+        char sb[64], lb[64], msg[SG_MSG];
+        snprintf(msg, sizeof msg, "Alicat setpoint %s SLPM does not follow the controller "
+                 "(%s SLPM): write lost or another writer", sg_fmtN(sb, sizeof sb, r->sp, 2),
+                 sg_fmtN(lb, sizeof lb, c->lastCmd, 2));
+        sg_mm_set(c, SG_MM_FOLLOW, msg);
+    }
+    if (c->now >= c->nextFollowResend) {
+        if (c->io.put_setpoint) c->io.put_setpoint(c->io.ctx, c->lastCmd);
+        c->nextFollowResend = c->now + p->holdRetryInterval;
+    }
+}
+
 void sg_alarm_checks(sg_ctl *c)
 {
     const sg_params *p = &c->p;
@@ -27,6 +70,7 @@ void sg_alarm_checks(sg_ctl *c)
     const int s = c->state;
     char b1[SG_MSG], b2[SG_MSG], n1[64], n2[64];
 
+    followCheck(c);
     /* flow mismatch (§5.1): Flow_RBV against the Alicat's own Setpoint_RBV.
        spSeen NaN = null (never seen). */
     if (isnan(c->spSeen) || fabs(r->sp - c->spSeen) > 1e-9) {
@@ -34,6 +78,8 @@ void sg_alarm_checks(sg_ctl *c)
     }
     if (sg_mfc_lost(c)) {
         /* spec §8.18: readings are stale; sgCore.c's mfcLink owns the Mismatch alarm meanwhile */
+    } else if (c->mmShown >= 0) {
+        /* a higher Mismatch source owns the alarm (spec §8.14 "Mismatch sources") */
     } else if (s != SG_IDLE && r->running) {
         double allowed = (r->ramp > 0 ? fabs(r->sp - c->flowAtSpChange) / r->ramp : 0)
                          + p->mismatchMargin;

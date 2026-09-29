@@ -25,6 +25,8 @@
 15IDC:SampleGas:Alm:NotReached  1  MONITOR
 15IDC:SampleGas:Alm:CylLow  1  MONITOR
 15IDC:SampleGas:Alm:Gas  1  MONITOR
+15IDC:SampleGas:Alm:Units  1  MONITOR
+15IDC:SampleGas:Alm:Shadow  1  MONITOR
 # 15IDC sample gas: linked PV names in use, on change (which PVs the traces came from)
 15IDC:SampleGas:Cfg:Active:MFC  1  MONITOR
 15IDC:SampleGas:Cfg:Active:O2  1  MONITOR

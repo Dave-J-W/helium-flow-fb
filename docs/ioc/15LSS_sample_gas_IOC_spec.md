@@ -76,9 +76,12 @@ guides in `docs/simulator/` (user guide, illustrated tour, agent guide) are reco
 
 ### 2.1 Beamline safety
 
-1. **No writes to `15IDC:*` PVs** by any tool (caput, pyepics, IOC links) until the user
-   explicitly lifts this rule. As of 2026-09-25 an experiment is running on them. **Reads** are
-   allowed only when you actually need them.
+1. **No writes to `15IDC:*` PVs** by any tool (caput, pyepics, IOC links), with one exception:
+   the controller IOC itself, writing only the PVs of rule 4, through its write gate (§8.3,
+   §8.20). The user lifted the rule for **supervised** writes on 2026-09-28 (the PC trial,
+   `st.cmd.pc`, writing `15IDC:Alicat1:` with the user present); the production IOC writes them
+   once installed, with writes enabled (default, §8.20). Nothing else may write a `15IDC:*` PV:
+   no test, script or agent. **Reads** are allowed only when you actually need them.
 2. **Bench IOCs and simulators must be confined to localhost.** Source `~/epics-sim-env.sh` in
    MSYS2, or set the same variables:
    - `EPICS_CA_ADDR_LIST=127.0.0.1`, `EPICS_CA_AUTO_ADDR_LIST=NO`
@@ -262,8 +265,10 @@ seq sampleGas, "P=15IDC:SampleGas:"
 
 - **Restore order:** parameters and PV names must be restored **before** `iocInit` (pass 0). The
   SNL program must not act until parameters are valid; see the IOC-start rules in §8.15.
-- **The SNL gets only `P`.** It reads the linked PV names from `$(P)Cfg:*` at start and connects
-  to them with `pvAssign` (§8.21), so the names are never compiled or hard-wired into `st.cmd`.
+- **The SNL gets `P` plus the start-up switches** `LOGDIR`, `HESET`, `READONLY`, `FORCE_SHADOW`
+  and (PC trial only, §8.20) `WRITE_MFC`; a missing `READONLY` means writable. It reads the linked
+  PV names only from `$(P)Cfg:*` at start and connects to them with `pvAssign` (§8.21), so the
+  names are never compiled or hard-wired into `st.cmd` (conformance audit 2026-09-29, D13).
 
 ---
 
@@ -307,8 +312,9 @@ epics-modules/ip master.
 ### 6.3 Cylinder pressure (`$(CYL)`, optional)
 
 - It does not exist yet.
-- If `CYL` is empty or disconnected, publish "n/a" and **do not use it in any logic**. The litres
-  and forecast come from `Total_RBV` (§8.16).
+- If `CYL` is empty or disconnected, publish NaN (INVALID severity; the screens show it as
+  invalid, §7.1) and **do not use it in any logic**. The litres and forecast come from
+  `Total_RBV` (§8.16).
 
 ---
 
@@ -351,13 +357,13 @@ epics-modules/ip master.
 | `$(P)Sts:Heartbeat` | longin | +1 every tick |
 | `$(P)Sts:TickAge` | calc | Seconds since `Sts:Heartbeat` last changed; `SCAN 1 second`, HIHI 10 s MAJOR (§13.4). Database-only: it keeps counting when the controller program stalls |
 | `$(P)Sts:HbLast` | calc | `Sts:Heartbeat` as of the previous `TickAge` scan (updated by its FLNK) |
-| `$(P)Sts:Banner` | lsi | Active alarm texts, most severe first, `"; "`-separated, or `No alarms` |
+| `$(P)Sts:Banner` | lsi | Active alarm texts, most severe first, `"; "`-separated, or `No alarms`. 2048 characters (`SIZV`), so several full alarm texts fit (256 cut the lower-severity ones mid-text; conformance audit 2026-09-29) |
 | `$(P)Sts:WorstSevr` | mbbi | Worst active alarm, 0/1/2 (with severities) |
 | `$(P)Sts:WriteEnable` | bi | Mirror of `Par:writeEnable` (§8.20) |
 | `$(P)He:LeftL` | ai | Litres left in the cylinder |
 | `$(P)He:EmptyMinH` / `EmptyMaxH` / `EmptyMedianH` | ai | Run-out forecast across windows, hours (NaN if none) |
 | `$(P)He:ForecastText` | lsi | E.g. `empty in 5.5 d–5.6 d (median 5.5 d, 5 windows)` or `run-out forecast: collecting data (needs ≥ 6 h)` |
-| `$(P)Sts:CylPressure` | ai | Copy of `$(CYL)` if configured; otherwise INVALID with text n/a |
+| `$(P)Sts:CylPressure` | ai | Copy of `$(CYL)` if configured and connected; otherwise NaN (INVALID severity), which the screens show as invalid (conformance audit 2026-09-29, D12) |
 
 ### 7.2 Admin and deep-admin parameters
 
@@ -410,6 +416,8 @@ epics-modules/ip master.
 | `Alm:NotReached` | 1 | `notReached` |
 | `Alm:CylLow` | 1, 2 | `cylLow` |
 | `Alm:Gas` | 1 | `gas` |
+| `Alm:Units` | 2 | – (new, §8.8; conformance audit 2026-09-29) |
+| `Alm:Shadow` | 2 | – (new, §8.20; user decision 2026-09-29) |
 
 Conditions, texts and clearing rules: §8.14. A heartbeat or IOC-down alarm cannot come from the IOC
 itself; it is the client's job (§13.4).
@@ -507,8 +515,10 @@ procServ log.
   9. **If `now mod pidScan == 0`:** run the **PID step** (§8.11).
   10. **Publish** all `Sts:`, `Diag:`, `Alm:` and `He:` PVs that changed; increment
       `Sts:Heartbeat`.
-- **Operator commands** (`Cmd:*`) are handled at the start of the next tick, after step 1, in this
-  order: FlowZero, Purge, ResumeFlow, ReleaseIdle, NewCylinder, MarkNewRun,
+- **Operator commands** (`Cmd:*`) are handled at the start of the next tick, before the
+  controller's own step 1: they see this tick's channel values and the O2 value and validity of
+  the previous tick, as the reference, which acts on a press between ticks (conformance audit
+  2026-09-29, D9). The order: FlowZero, Purge, ResumeFlow, ReleaseIdle, NewCylinder, MarkNewRun,
   ResetOverrideCount,
   then `Cfg:RestoreDefaults` and `Cfg:Apply` (§8.21). Each is reset to 0 after handling. The reference acts on button presses immediately; acting at
   the next tick is accepted.
@@ -543,6 +553,20 @@ procServ log.
   `command(PID.OVAL)` (§8.11 step 5), which sets `lastCmd` and puts `$(MFC)Setpoint`.
 - **While FBON = 0,** the SNL writes `$(P)PID:Out` = `lastCmd` whenever `lastCmd` changes, so that
   epid's bumpless start (FBON 0 → 1) begins from the flow actually commanded.
+- **A flow that is not a number** (NaN or ±Inf, from a bad PID output or a failed epid
+  configure/process) is never commanded: `lastCmd` is kept, nothing is put, MAJOR
+  `command ignored: flow value is not a number` is logged once per episode (ruling R12), and
+  while it lasts `Alm:Mismatch` = 2, `controller cannot compute a flow (PID output not a number):
+  flow held at <lastCmd:.2f> SLPM` (§8.14, Mismatch sources). The next finite command clears it
+  (logged); entering IDLE clears it silently (nothing is computed there). Conformance audit
+  2026-09-29: before, only the log line said so and the banner read `No alarms`.
+- **A failed Alicat write is an alarm.** The SNL puts with `pvPut(..., SYNC)` and reports each
+  status. While any of the three put channels' last put failed, `Alm:Mismatch` = 2,
+  `MFC write failed: <PV> (pvStat <n>): controller cannot act` (the first failing channel in the
+  order Setpoint, RampRate, Run); the next good put of that channel ends its streak, and the
+  alarm clears (logged) when no channel is failing. The MINOR `put to <PV> failed (pvStat <n>)`
+  is still logged once per streak and channel. A put that succeeds at the CA level while the
+  device write fails is caught by the setpoint-follow check (§8.14) instead.
 
 ### 8.4 States
 
@@ -588,7 +612,7 @@ procServ log.
 | FlowZero | always | enter FLOW_ZERO (`operator pressed Flow Zero`) |
 | ResumeFlow, from OPEN_LOOP | state = OPEN_LOOP and `o2ok` | enter HANDOFF (`operator pressed Resume Flow`). This is the reference's Resume PID. |
 | ResumeFlow, from IDLE | state = IDLE, station configured, `o2ok`, and o2 < `lidLevel` | as the restart resume of §8.15: `lastCmd` = `Setpoint_RBV`, `PID:Out` = `lastCmd`, enter REGULATE (`operator pressed Resume Flow`), `configEpid`, `FBON` = 1 |
-| ReleaseIdle | always | enter IDLE (`admin released control`) |
+| ReleaseIdle | always | enter IDLE (`admin released control`); during the start-up wait for the Alicat, remembered: the restart decision then enters IDLE (§8.15 step 1) |
 | NewCylinder | always | §8.16 |
 | MarkNewRun | always | ledger event `newrun`; log `admin: start of a new user run marked` |
 
@@ -667,8 +691,12 @@ procServ log.
 4. `blind` = not `o2ok`.
 5. Enter PURGE, with reason `blind purge: O2 unavailable, timer only` or `purge started`.
 
-**Optional:** if `FlowUnits_RBV` ≠ SLPM, raise MAJOR `MFC flow units are <u>, not SLPM`. This is
-in the design spec §4.1 but not in the reference; implement it as an alarm only.
+**Flow units** (in the design spec §4.1, not in the reference; an alarm only, never a refusal):
+every tick of a configured, started station, not only in PRECHECK, if `FlowUnits_RBV` ≠ SLPM,
+raise `Alm:Units` = 2, `MFC flow units are <u>, not SLPM`; when it reads SLPM, clear it. While
+there is no reading of the current Alicat's `FlowUnits_RBV` (it is optional), the alarm keeps its
+level. Wrong units make every flow reading, the mismatch checks, the ledger and the forecast
+wrong, so this is on the banner, not only in the log (conformance audit 2026-09-29).
 
 ### 8.9 PURGE: timer, blind mode and lid check (`doPurge`, first part)
 
@@ -759,7 +787,9 @@ in the design spec §4.1 but not in the reference; implement it as an alarm only
    - ODEL
    - writes OUTL (`$(P)PID:Out`) while FBON = 1
 5. **After processing:** if FBON = 1, `command(PID.OVAL)` (§8.3). This is the only path by which
-   the PID output reaches the Alicat.
+   the PID output reaches the Alicat. An OVAL that is not a number, or a failed epid configure or
+   process, is passed on as not a number: nothing is commanded, the core's copy of OVAL keeps its
+   last value, and §8.3's `controller cannot compute a flow …` alarm is raised.
 
 **Reference equivalence.** The reference's `processEpid` reimplements `devEpidSoft`:
 - p = KP·e; ΔI = KP·KI·e·dt
@@ -822,7 +852,8 @@ forwards OVAL itself.
 
 **Flow mismatch** (every tick, any state):
 - **Track the setpoint:** when `Setpoint_RBV` changes (by more than 1e-9), record the change time
-  and the flow at that moment. A hold resume restarts this too (§8.7).
+  and the flow at that moment. A hold resume (§8.7) and a reconnect re-send (§8.18) restart this
+  too.
 - **Evaluate only if state ≠ IDLE and `Running_RBV` = 1:**
   - allowed = (ramp > 0 ? \|sp − flowAtChange\| / ramp : 0) + `mismatchMargin`
   - tol = max(`mismatchAbs`, `mismatchFrac`·sp)
@@ -831,6 +862,49 @@ forwards OVAL itself.
     `flow mismatch: cylinder empty or MFC fault?`
   - if not off: clear it
 - **Otherwise:** clear it, silently.
+- **Only while no Mismatch source below owns the alarm** (the flow check compares `Flow_RBV` with
+  the Alicat's own `Setpoint_RBV`, so a setpoint that never arrived looks healthy to it).
+
+**Setpoint follow** (every tick, before the flow mismatch; not in the reference, whose Alicat
+always follows; conformance audit 2026-09-29):
+- **Judged only while** writes are enabled (§8.20; never in shadow mode), state ≠ IDLE,
+  `Running_RBV` = 1, the MFC connected (§8.18), and `lastCmd` and `Setpoint_RBV` are numbers.
+  Otherwise the count restarts, and the alarm, if raised, clears silently.
+- **off** = \|`Setpoint_RBV` − `lastCmd`\| > max(`mismatchAbs`, `mismatchFrac`·`lastCmd`).
+  Count consecutive off ticks; a tick that is not off restarts the count and clears the alarm
+  (logged). The hold-resume re-send (§8.7) and the reconnect re-send (§8.18) also restart the
+  count.
+- **Ramp allowance.** `Setpoint_RBV` reports the Alicat's *ramped* setpoint. In the archive of
+  24 Sep it went 0.43 then 20 over 7 s on a purge. So the alarm also waits until more than
+  `step` / `RampRate_RBV` + `holdDetect` + `mismatchMargin` s have passed since `lastCmd` last
+  changed, where `step` = \|`lastCmd` − the command before it\|. With `RampRate_RBV` = 0
+  (instant) or unknown, the term is 0. A 20 SLPM step at 0.5 SLPM/s thus gets 47 s. PID steps
+  are small, so in REGULATE the wait stays near 8 s and a second writer is still caught.
+- **When the count exceeds `holdDetect` + `mismatchMargin`** (8 s by default), and the ramp
+  allowance has passed: raise
+  `Alm:Mismatch` = 2, `Alicat setpoint <sp:.2f> SLPM does not follow the controller
+  (<lastCmd:.2f> SLPM): write lost or another writer` (the text as first raised; it is not
+  re-logged while it lasts), and re-send `lastCmd` at once and then every `holdRetryInterval` s
+  while it lasts (through the gated put; the re-sends are not logged one by one).
+- **What it catches:** a lost one-shot command (the purge entry's `purgeFlow`, Flow Zero's and
+  OPEN_STOP's 0: without it the panel read "Flow stopped" while the helium kept flowing), a CA
+  put that succeeded while the device write failed, and a second writer such as the old timer
+  script.
+
+**Mismatch sources.** `Alm:Mismatch` carries every "the Alicat does not do what the controller
+asks" condition. Each source is tracked on its own; the alarm shows the text of the highest
+active one, in this order:
+1. `MFC not responding (…)` (§8.18)
+2. `MFC write failed: …` (§8.3)
+3. `controller cannot compute a flow …` (§8.3)
+4. `Alicat setpoint … does not follow the controller …` (above)
+5. `flow mismatch: cylinder empty or MFC fault?` (above; evaluated only when 1-4 are all off)
+
+When the shown source ends and a lower one is active, the alarm switches to its text (logged
+with its severity); when none is left, the alarm clears (logged, unless the source's rule says
+silently). The start-up wait (§8.15) and `not configured` (§8.21) texts use the same alarm while
+the state machine does not run, so they never meet the sources above. An §8.21 MFC change and the
+restart reset every source.
 
 **In REGULATE only,** after the settling logic (§8.12):
 
@@ -849,7 +923,8 @@ forwards OVAL itself.
   operator alarm.
 
 **Raised elsewhere:** OpenStop (§8.6, §8.9), PurgeIncomplete (§8.10), O2Bad (§8.2), OpenLoop
-(§8.4), HoldStuck (§8.7), Override (§8.14), CylLow (§8.16), Gas (§8.8).
+(§8.4), HoldStuck (§8.7), Override (§8.14), CylLow (§8.16), Gas and Units (§8.8), Shadow
+(§8.20).
 
 **Clearing on transitions:** see the common entry actions in §8.4. `OpenStop` and
 `PurgeIncomplete` clear on PRECHECK entry.
@@ -862,12 +937,22 @@ forwards OVAL itself.
 - **At first tick after `iocInit`,** with parameters and PV names restored by autosave:
   0. Read `Cfg:*` and connect to those names (§8.21, "At IOC start"). If the station is not
      configured, enter IDLE (`restart: not configured`) and skip the rest.
-  1. Wait until the O2 and Alicat PVs are connected (log the wait), or 30 s have passed; treat a
+  1. Wait until the O2 and Alicat PVs are connected (log the wait: `waiting for the O2 (up to
+     30 s) and Alicat PVs (no time limit) to connect`), or 30 s have passed; treat a
      still-missing O2 as invalid. **If the Alicat is still not connected, keep waiting with no time
      limit** (MAJOR alarm `waiting for the Alicat PVs …: controller not acting yet`) and make the
      decision below when it connects; never settle into IDLE just because the Alicat IOC started
      later than this one (user direction 2026-09-28: in production the failure to avoid is the
      controller silently not acting).
+     **Presses during this wait** (conformance audit 2026-09-29, D2 and D8): if `Par:writeEnable`
+     goes 0 → 1 while the wait for the Alicat lasts (only a shadow start, `FORCE_SHADOW`, can
+     see this), or Release control is pressed, the decision below is not taken: when the Alicat
+     connects, log step 3 and enter IDLE (`restart: writes enabled during the start-up wait`, or
+     `admin released control`; the press wins if both). Never REGULATE or OPEN_LOOP, which would
+     write with no operator press and break the §8.20 promise. A switch back to shadow before the
+     Alicat connects cancels the first. Release control during the wait logs `Release control
+     noted: the controller stays in IDLE when the Alicat PVs connect`. (A switch seen in the
+     decision's own tick is handled by §8.20 after the decision: IDLE as well.)
   2. valid = O2 severity < INVALID and `o2Min` ≤ o2 ≤ `o2Max`.
   3. Log `IOC started (autosaved settings restored)`.
   4. **Decide the state:**
@@ -876,7 +961,14 @@ forwards OVAL itself.
        `FBON` = 1. epid starts bumplessly from the current setpoint.
      - else if `Setpoint_RBV` ≤ 0: enter IDLE (`restart: setpoint is 0 (§4.7)`)
      - else if not valid: enter OPEN_LOOP (`restart: O2 invalid (§4.7)`)
-     - else: enter IDLE (`restart: O2 above lid threshold (§4.7)`)
+     - else (valid, o2 ≥ `lidLevel`, `Setpoint_RBV` > 0): enter PRECHECK (`restart: O2 above
+       lid threshold with the Alicat flowing: purge resumed`), and so PURGE. User decision
+       2026-09-29; it replaces the reference's IDLE (`restart: O2 above lid threshold (§4.7)`),
+       which left the Alicat at up to `purgeFlow` indefinitely (e.g. a restart in the first
+       minutes of a purge) with the hold monitor, the lid detector and the mismatch checks off
+       and `No alarms` on the banner. The purge timeout bounds the new purge, and its lid check
+       stops the flow if the enclosure is open (a start at or above `dropSkipLevel`). A known
+       difference from the reference; no recorded trace reaches this branch.
 - **Not restored** (they restart from zero): alarms, debounce state, histories (O2, rate,
   average, OVAL), hold-monitor counters, settling state.
 - **Restored:** all parameters and mode slots, the PV-name fields, `Mode`, `target`, and the helium state (`CumL`,
@@ -965,6 +1057,33 @@ forwards OVAL itself.
   - raise `Alm:Mismatch` = 2 with text `MFC not responding (CA disconnected)`
   - continue the state machine without writing (puts would fail)
   - on reconnect: re-send `lastCmd` as in §8.7, and log
+- **Every reconnect re-send restarts the flow-mismatch timer** as the hold resume does (§8.7):
+  `spChangeT` = `now`, `flowAtSpChange` = the current `Flow_RBV`. The flow may have moved during
+  the outage while `Setpoint_RBV` did not, and the long expired ramp allowance would otherwise
+  raise an instant MAJOR `flow mismatch` (conformance audit 2026-09-29).
+- **A frozen `Flow_RBV` counts as not responding** (user decision 2026-09-29, conformance gap
+  G3). If the Alicat IOC's poll stops without driving its soft `*_RBV` records INVALID,
+  `Flow_RBV` and `Setpoint_RBV` freeze in agreement and no other check sees it.
+  - **Judged only while the Alicat should be flowing:** `Setpoint_RBV` > 0 and `Running_RBV` = 1.
+    A Channel Access monitor arrives only when the value changes, so a steady reading (e.g. 0
+    with the flow off) would look frozen while the Alicat IOC is fine. Outside that condition,
+    or with `Flow_RBV` disconnected, the clock restarts.
+  - **Frozen** = no new `Flow_RBV` value (its time stamp unchanged) for more than
+    max(12000 s, `frozenTime`). Then the Alicat counts as not responding as above, with the text
+    `MFC not responding (Flow_RBV reading frozen)`; on recovery the re-send is logged
+    `MFC readings updating again: setpoint <lastCmd:.2f> re-sent`.
+  - **Puts are still made** while it lasts (unlike a CA disconnect; a failed put raises §8.3's
+    alarm): the reading may only be steady, and a Flow Zero must never wait for it to move.
+  - **Why 12000 s** (from the archive in `analysis/data/`): the longest run of one unchanged
+    `Flow_RBV` value with `Setpoint_RBV` > 0 is 154 s in the ~10 s file of 24 Sep 09:48–13:48
+    (659 runs; the longest gap between samples 78 s), and at most 3979 s (66 min, 24 Sep 01:26,
+    at 0.25 SLPM) in the week's ~180 s file of 17–24 Sep, which cannot resolve shorter changes
+    (in the overlap it shows 33 of 81 pairs equal while the ~10 s file changes every ~15 s); none
+    of its 84 clock hours with the setpoint > 0 is without a change. `analysis/flow_rbv_runs.py`
+    reproduces these numbers. The limit is 3 × 3979 s, rounded up. It is a
+    backstop: the setpoint-follow check (§8.14) sees a frozen `Setpoint_RBV` as soon as the
+    controller changes its command. Lower it once a night of monitor-rate `Flow_RBV` data shows
+    the real longest run.
 - **A short disconnect** (≤ `holdDetect` s) raises no alarm, but on reconnect `lastCmd` is still
   re-sent silently, outside IDLE: a one-shot command issued during the blip (Flow Zero, the purge
   flow) would otherwise be lost with no alarm (added 2026-09-25 after code review).
@@ -991,9 +1110,18 @@ forwards OVAL itself.
 - **When 0, shadow mode:** the controller runs every rule, but:
   - no puts to `Setpoint`, `RampRate` or `Run`. The SNL's single gated put function (§8.3)
     suppresses them; epid never links to the Alicat (§7.8), so there is nothing else to redirect.
-  - log `shadow mode: would write <PV> = <v>` for a suppressed write, but only when `<v>` differs
-    from the last value logged for that PV (HANDOFF and OPEN_LOOP call `command` every tick)
+  - log `shadow mode: would write <Setpoint|RampRate> = <v:.2f>` (the record name, not the full
+    PV) or `shadow mode: would write Run` for a suppressed write, but only when the text differs
+    from the last one logged for that PV (HANDOFF and OPEN_LOOP call `command` every tick;
+    conformance audit 2026-09-29, D11, recording the implemented form)
   - the would-be setpoint is visible as `Sts:LastCmd`
+  - **on the banner** (user decision 2026-09-29): while `Par:writeEnable` = 0 on a configured,
+    started station, raise `Alm:Shadow` = 2, `shadow mode: the controller is not writing to the
+    Alicat`. Clear it (logged) when writes are enabled; clear it silently when the station is not
+    running (not configured). Reason: `writeEnable` is autosaved, so a production IOC once
+    switched to shadow comes up in shadow at every later start, including `start_ioc -b` at
+    boot, and would otherwise say `No alarms` while never writing. A read-only IOC, and a
+    `FORCE_SHADOW` start until Live is switched on, therefore show this alarm; that is intended.
 - **Safe by default:** because the gate is in one function and the database holds no Alicat
   output link, an IOC that restarts into REGULATE (§8.15) with `writeEnable` = 0 cannot write the
   Alicat, whatever order things happen in at start.
@@ -1006,6 +1134,8 @@ forwards OVAL itself.
     while in shadow mode is **not** sent.
   - The Alicat changes only when the operator next presses Purge, Flow Zero, or Resume Flow
     (§8.5), which starts regulating from the current flow without a purge.
+  - This holds during the start-up wait for the Alicat too: the restart decision then enters
+    IDLE (§8.15 step 1).
 - **A transition 1 → 0** (decided by the user 2026-09-25) leaves the state unchanged: the
   controller keeps regulating (or purging, etc.) in shadow mode and only stops writing. Log MAJOR
   `writes disabled: shadow mode, Alicat holds <Setpoint_RBV:.2f> SLPM`. The Alicat keeps its last
@@ -1042,8 +1172,8 @@ forwards OVAL itself.
      2026-09-28).
   4. `pvAssign` the changed channels to their new names. Reset everything derived from the old
      channels: O2 history, rate and average buffers, `sameCount`, `aboveCount`, the mismatch
-     tracking and the hold-monitor counters. Clear `O2Bad`, `Mismatch`, `HoldStuck` and `Gas`
-     silently.
+     tracking and the hold-monitor counters. Clear `O2Bad`, `Mismatch`, `HoldStuck`, `Gas` and
+     `Units` silently.
   5. If `Cfg:MFC` changed, re-baseline the ledger so the new totalizer is not counted as usage:
      `LastTotal` = unset (the next tick takes the new `Total_RBV` as its reference, adding
      nothing to `CumL`), `CylBase` = unset (first-start rule of §8.16), and clear the usage log
@@ -1146,13 +1276,15 @@ forwards OVAL itself.
 |---|---|---|---|
 | baseFlow | SLPM | 0.01 | 20 |
 | n | – | 0.1 | 3 |
-| KP | SLPM/% | −100 | 0 |
+| KP | SLPM/% | −100 | −0.1 |
 | KI | 1/s | 0 | 0.05 |
 | drvh | SLPM | 0.1 | 20 |
 | drvl | SLPM | 0 | 5 |
 
 - **Invariant:** the effective DRVL ≤ DRVH (§8.11 enforces it).
-- **KP must be negative** (more flow lowers O2).
+- **KP must be negative** (more flow lowers O2). The maximum −0.1 enforces it (user decision
+  2026-09-29): with KP = 0 both the P term and the integral step KP·KI·e·dt are zero, so
+  REGULATE would hold a fixed flow with no alarm.
 
 ---
 
@@ -1525,7 +1657,7 @@ reviewed as mockups with the user on 2026-09-25.
 | Where the IOC sits under `ChemMat/` | user | production install | **Decided:** its own top at `ChemMat/lssSampleGas/`, so building it cannot touch the existing ChemMat IOCs. It starts through the existing `start_ioc` convention, recorded in §11.3. |
 | Real usable litres per helium cylinder (`cylCapacityL`) | user | forecast accuracy | **Later, from data.** Keep the default 8000 L. The ledger measures it: `Total_RBV` used between two `NewCylinder` events, at a cylinder that ran empty (mismatch alarm). Shadow mode collects this without writing. |
 | Cylinder-pressure PV | user (future) | nothing (optional) | Enter in `Cfg:CYL` when it exists. |
-| Lifting the no-write rule on `15IDC:*` | user | §15.3 onwards | **The user lifts it when ready.** Do not ask or assume; until then the production IOC runs with `writeEnable` = 0. |
+| Lifting the no-write rule on `15IDC:*` | user | §15.3 onwards | **Lifted for supervised writes on 2026-09-28** (§2.1 rule 1). The production IOC starts with `writeEnable` = 1 (§8.20, §9.1; user decision 2026-09-28); commissioning in shadow uses `startLSSSampleGasTest` (`FORCE_SHADOW`, its own autosave), and `Alm:Shadow` shows it (§8.20). |
 | Hardware test results (lid check on an open box, ceiling, bump tests) | user + agent | final parameters | After the no-write rule is lifted. |
 
 ---

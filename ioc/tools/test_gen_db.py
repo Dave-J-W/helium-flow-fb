@@ -211,6 +211,79 @@ class TestParams(unittest.TestCase):
                 self.assertEqual(p["level"], row["level"])
 
 
+def parse_9_2():
+    """§9.2 mode-slot limits: {field: (unit, min, max)}."""
+    rows = {}
+    for l in _section("9.2"):
+        if not l.startswith("| ") or l.startswith("| field"):
+            continue
+        cells = [c.strip() for c in l.strip().strip("|").split("|")]
+        if len(cells) != 4:
+            continue
+        norm = lambda s: s.replace("−", "-")
+        rows[cells[0]] = (cells[1], float(norm(cells[2])), float(norm(cells[3])))
+    return rows
+
+
+class TestModeFields(unittest.TestCase):
+    def test_mode_fields_match_spec_9_2(self):
+        spec = parse_9_2()
+        self.assertEqual(set(spec), {f["field"] for f in sg_pvs.MODE_FIELDS})
+        for f in sg_pvs.MODE_FIELDS:
+            with self.subTest(field=f["field"]):
+                unit, mn, mx = spec[f["field"]]
+                self.assertEqual(f["unit"], unit)
+                self.assertAlmostEqual(f["min"], mn)
+                self.assertAlmostEqual(f["max"], mx)
+
+    def test_kp_must_be_negative(self):
+        # §9.2 "KP must be negative" (D5, user decision 2026-09-29): KP = 0 would switch the
+        # feedback off without an alarm, so the record's DRVH keeps it below zero.
+        kp = next(f for f in sg_pvs.MODE_FIELDS if f["field"] == "KP")
+        self.assertLess(kp["max"], 0)
+        for x in sg_pvs.MODE_SLOTS:
+            self.assertLessEqual(sg_pvs.MODE_DEFAULTS[x]["KP"], kp["max"])
+        text = gen_db.build_db_text()
+        for x in sg_pvs.MODE_SLOTS:
+            m = re.search(r'record\(ao,\s*"\$\(P\)Mode:%s:KP"\)\s*\{([^}]*)\}' % x, text)
+            self.assertIsNotNone(m, f"Mode:{x}:KP")
+            fields = dict(FIELD_RE.findall(m.group(1)))
+            self.assertLess(float(fields["DRVH"]), 0, f"Mode:{x}:KP DRVH")
+
+
+def parse_7_5():
+    """§7.5 alarm table: [(name after "Alm:", levels cell)] in table order."""
+    rows = []
+    for l in _section("7.5"):
+        m = re.match(r"^\| `Alm:([A-Za-z0-9]+)` \| ([^|]+) \|", l)
+        if m:
+            rows.append((m.group(1), m.group(2).strip()))
+    return rows
+
+
+class TestAlarms(unittest.TestCase):
+    def test_alarm_table_matches_spec_7_5(self):
+        # order too: ALARM_TABLE follows enum sg_alarm (sgCore.h) and almNames (sgIoc.c)
+        self.assertEqual([n for n, _ in parse_7_5()], [n for n, _ in sg_pvs.ALARM_TABLE])
+
+    def test_new_cannot_act_alarms_are_major(self):
+        # G2 (user decision 2026-09-29) and D3: shadow mode and wrong flow units are MAJOR
+        levels = dict(parse_7_5())
+        self.assertEqual(levels.get("Shadow"), "2")
+        self.assertEqual(levels.get("Units"), "2")
+
+
+class TestBanner(unittest.TestCase):
+    def test_banner_holds_several_alarms(self):
+        # D7 (conformance audit 2026-09-29): at SIZV 256 two or three alarm texts filled the
+        # banner and the lower-severity ones were cut mid-text; spec 7.1 now says 2048.
+        m = re.search(r'record\(lsi,\s*"\$\(P\)Sts:Banner"\)\s*\{([^}]*)\}', gen_db.build_db_text())
+        self.assertIsNotNone(m)
+        self.assertEqual(dict(FIELD_RE.findall(m.group(1))).get("SIZV"), "2048")
+        row = next(l for l in _section("7.1") if l.startswith("| `$(P)Sts:Banner`"))
+        self.assertIn("2048", row)
+
+
 class TestDeepGroups(unittest.TestCase):
     def test_49_d_level_keys_in_exactly_one_group(self):
         d_keys = {p["key"] for p in sg_pvs.PARAMS if p["level"] == "D"}

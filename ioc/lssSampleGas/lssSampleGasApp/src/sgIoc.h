@@ -14,10 +14,11 @@
    implementations call sg_gate_request instead of writing the Alicat directly.
 
    Field ownership, every tick (safety-critical -- read this before touching either field):
-   - g->mfcConnected is set from the current tick's in.mfcConnected, through
-     sg_gate_set_connected, before any sg_gate_request call in that tick (sgCore.h's contract:
-     treat the MFC as connected in the same tick in.mfcConnected says so). Never assign it
-     directly: sg_gate_set_connected is what empties the queue on a disconnect (P2-R6).
+   - g->mfcConnected is set from the current tick's CA state of the Alicat (in.mfcConnected, or
+     1 when that is 0 only because Flow_RBV is frozen, in.mfcStale: spec §8.18 keeps puts then),
+     through sg_gate_set_connected, before any sg_gate_request call in that tick (sgCore.h's
+     contract: treat the MFC as connected in the same tick in.mfcConnected says so). Never assign
+     it directly: sg_gate_set_connected is what empties the queue on a disconnect (P2-R6).
    - g->writeEnable is set exactly ONCE, at start, by sg_gate_init (from the autosaved
      Par:writeEnable, before sg_restart). After that it changes ONLY through
      sg_gate_set_enable -- never assign it directly from Par:writeEnable on a later tick. Doing
@@ -150,11 +151,45 @@ int  sg_start_decision(int configured, const sg_inputs *in);
    acting yet" (logged MAJOR by sg_set_alarm). *raised is the caller's latch. sg_restart's reinit
    clears the alarm when the wait ends. */
 void sg_start_wait_alarm(sg_ctl *c, int *raised, const char *names);
+/* D2, D8 (spec §8.15 step 1): what the start-up wait remembered. released = Release control was
+   pressed during the wait; live = Par:writeEnable went 0 -> 1 during the wait and is still 1.
+   Returns the IDLE reason the restart decision must use instead of sg_restart ("admin released
+   control" first, then "restart: writes enabled during the start-up wait"), or NULL. */
+const char *sg_start_idle_reason(int released, int live);
+/* The restart decision's IDLE alternative: reinit (clears the wait alarm), log "IOC started
+   (autosaved settings restored)", enter IDLE with reason. Nothing is commanded. */
+void sg_start_idle(sg_ctl *c, double now, const char *reason);
 /* A station that cannot act because it is not configured, while writes are enabled: on = 1 raises
    Alm:Mismatch MAJOR "not configured: <text>" (text e.g. "Cfg:MFC is empty"); on = 0 clears it
    silently if this function raised it. The core never runs on an unconfigured station, so it
    does not compete for Mismatch there. */
 void sg_not_configured_alarm(sg_ctl *c, int *raised, int on, const char *text);
+/* G2 (spec §8.20, user decision 2026-09-29), every tick: running = the station is configured and
+   started, writeEnable = the gate's. running && !writeEnable raises Alm:Shadow MAJOR "shadow
+   mode: the controller is not writing to the Alicat" (logged once); otherwise an active Shadow
+   alarm is cleared, logged when writes are enabled, silently when the station is not running. */
+void sg_shadow_alarm(sg_ctl *c, int running, int writeEnable);
+/* D3 (spec §8.8), every tick of a running station with this tick's FlowUnits_RBV (NULL = no
+   reading of the current Alicat: the alarm keeps its level): not "SLPM" raises Alm:Units MAJOR
+   "MFC flow units are <u>, not SLPM" (logged when the text changes); "SLPM" clears it (logged).
+   sg_channels_changed clears it silently on an MFC change. */
+void sg_units_alarm(sg_ctl *c, const char *units);
+/* D1a (spec §8.3), after each Alicat put: kind = enum sg_act, pvStat = pvPut's status (0 = ok),
+   stat[3] = the caller's per-channel status of the last put (zero it at start), pv[3] = the
+   channels' full PV names. The first failure of a streak logs MINOR "put to <PV> failed (pvStat
+   <n>)"; the core's write-failed Mismatch source shows the first failing channel (Setpoint,
+   RampRate, Run order) and clears when none is failing (sg_mfc_write_status). */
+void sg_put_done(sg_ctl *c, int stat[3], const char *const pv[3], int kind, int pvStat);
+/* G3 (spec §8.18, user decision 2026-09-29): a frozen Alicat Flow_RBV. Call once per tick with
+   the Flow_RBV channel's state: ok = connected with a value of the current Alicat, (tsSec,
+   tsNsec) = its time stamp, flowing = the Alicat should be flowing (Setpoint_RBV > 0 and
+   Running_RBV = 1), limit = seconds. Returns 1 while the time stamp has not changed for more
+   than limit s of flowing; !ok or !flowing restarts the clock (a CA monitor comes only with a
+   new value, so a steady reading with the flow off is not frozen). */
+typedef struct { int have; unsigned sec, nsec; double since; } sg_stale;
+#define SG_FLOW_STALE_S 12000.0   /* 3 x the longest unchanged run in the archive, spec §8.18 */
+int  sg_flow_stale(sg_stale *st, double now, int ok, unsigned tsSec, unsigned tsNsec,
+                   int flowing, double limit);
 
 /* ================================================================ the station (IOC only)
    sgIoc.c, built only into the IOC library (sampleGasSupport): one sg_station per `seq sampleGas`
@@ -220,6 +255,9 @@ int         sgIocReady(sg_station *s);
    monitor events into that state's wake-up mask (see sampleGas.st, state init). */
 int         sgIocTouch(const void *a, const void *b);
 void        sgIocWaitEnd(sg_station *s);          /* logs the outcome of the wait, Cfg:Status */
+/* Once a second during that wait: Sts:Heartbeat +1 (the program is alive; Sts:TickAge must not
+   call it stalled), and the tick clock's reference moves to this second. */
+void        sgIocWaitBeat(sg_station *s);
 /* Seconds until the next tick (a whole wall-clock second); schedules that tick's `now`. */
 double      sgIocSecondsToNextTick(sg_station *s);
 /* One tick, spec §8.1 order (see sgIoc.c). */

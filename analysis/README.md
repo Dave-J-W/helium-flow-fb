@@ -13,6 +13,7 @@ Regenerate every number and figure (Python 3.12, versions pinned in `requirement
     python run_all.py     # results.json, hr_results.json, figures/fig1-fig13
     python events.py      # event table to console
     python classify.py    # per-episode lid table to console
+    python flow_rbv_runs.py   # longest unchanged Flow_RBV run (the IOC's frozen-reading limit)
 
 The controller that uses these numbers is specified in
 `../docs/superpowers/specs/2026-09-24-o2-purge-feedback-design.md` (its section 2.1).

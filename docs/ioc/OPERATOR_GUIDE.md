@@ -147,7 +147,10 @@ alarm server (`sampleGas_alarms.xml`).
 | `O2 unavailable: running blind at fixed flow` | MAJOR | Same cause. When the O2 is back, press Resume Flow. |
 | `MFC on hold, cannot resume` | MAJOR | The Alicat stays on hold although the controller wrote Run. Check it at the device or its IOC. |
 | `flow mismatch: cylinder empty or MFC fault?` | MAJOR | The flow doesn't follow the setpoint: check the cylinder valve and pressure. |
-| `MFC not responding …` | MAJOR | The Alicat's PVs are disconnected: check the Alicat IOC. |
+| `MFC not responding …` | MAJOR | The Alicat's PVs are disconnected (`CA disconnected`), or its flow reading has not changed for over 3 h while it should be flowing (`Flow_RBV reading frozen`): check the Alicat IOC. |
+| `MFC write failed: … controller cannot act` | MAJOR | The controller's writes to the Alicat fail: the flow is not what the panel says. Check the Alicat IOC; set the flow by hand if needed. |
+| `Alicat setpoint … SLPM does not follow the controller (… SLPM): write lost or another writer` | MAJOR | The Alicat's setpoint is not the one the controller sent (it re-sends every 10 s). Look for a second writer (the old timer script, a manual setting) or a stuck Alicat IOC. |
+| `controller cannot compute a flow (PID output not a number): flow held at … SLPM` | MAJOR | The flow stays where it was. Check the PID and mode parameters (Admin, Deep admin); then press Purge or Resume Flow. |
 | `flow ≥ … × expected: check enclosure (seal)` | MINOR / MAJOR | More helium than this lid needs: a leak, or the wrong enclosure mode. |
 | `flow ≤ … × expected: wrong enclosure mode selected?` | MINOR | Much less helium than expected: check the mode. |
 | `PID pinned at max flow: check enclosure seal` | MAJOR | The PID is at its flow limit and still can't reach the target. |
@@ -155,6 +158,8 @@ alarm server (`sampleGas_alarms.xml`).
 | `target not reached within …` | MINOR | The O2 hasn't settled at the target in time. |
 | `helium cylinder empty in < … h (forecast)` | MINOR (24 h) / MAJOR (6 h) | Change the cylinder soon; then press New He cylinder fitted. |
 | `MFC gas table is …, not He (flow reading wrong)` | MINOR | Set the Alicat's gas table to helium. |
+| `MFC flow units are …, not SLPM` | MAJOR | Set the Alicat's flow units to SLPM: until then every flow reading, the helium count and the forecast are wrong. |
+| `shadow mode: the controller is not writing to the Alicat` | MAJOR | Writes are off (section 7): the controller computes but the Alicat stays wherever it is. Switch Live on the Admin screen unless shadow mode is intended (commissioning). |
 | `override: …` | MINOR (5 min) | Information: the controller corrected an Alicat setting (e.g. ramp rate, hold). The Admin screen keeps the list. |
 | `waiting for the Alicat PVs …: controller not acting yet` | MAJOR | At IOC start: the Alicat IOC is not up. The controller acts as soon as it connects. |
 | `controller not ticking (IOC up, program stalled)` (red over the banner; alarm server: `Sts:TickAge`) | MAJOR | The IOC answers but the controller has stopped: nothing on the panel is being updated, and the Alicat holds its last setpoint. Restart the IOC (`start_ioc 15LSS_sample_gas`, or `exit` and restart in its console). |
@@ -187,7 +192,9 @@ Every field shows its PV name in angle brackets with a magenta dashed border, th
 grey, and the trend's lines go flat at their last values. The SHADOW MODE badge shows too: with
 the IOC gone, nothing confirms that writes are enabled. The Alicat keeps its last setpoint, so the helium keeps flowing at that rate. The alarm server reports the
 disconnection. The IOC does not restart by itself: start it with `start_ioc 15LSS_sample_gas`
-on the IOC host. It resumes regulation where it was, without a bump in the flow.
+on the IOC host. It resumes regulation where it was, without a bump in the flow. If the O2 is
+still above 10 % with the Alicat flowing (a restart during a purge, or with the lid off), it purges
+again: the purge's lid check stops the flow if the enclosure is open.
 
 ## 9. Admin
 

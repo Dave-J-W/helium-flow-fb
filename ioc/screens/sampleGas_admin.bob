@@ -1128,7 +1128,7 @@
       <font family="Liberation Sans" style="REGULAR" size="11.0" />
     </font>
     <show_units>false</show_units>
-    <tooltip>Mode:A:KP, limits -100 to 0 SLPM/%</tooltip>
+    <tooltip>Mode:A:KP, limits -100 to -0.1 SLPM/%</tooltip>
   </widget>
   <widget type="textentry" version="3.0.0">
     <name>mode_A_KI</name>
@@ -1215,7 +1215,7 @@
       <font family="Liberation Sans" style="REGULAR" size="11.0" />
     </font>
     <show_units>false</show_units>
-    <tooltip>Mode:B:KP, limits -100 to 0 SLPM/%</tooltip>
+    <tooltip>Mode:B:KP, limits -100 to -0.1 SLPM/%</tooltip>
   </widget>
   <widget type="textentry" version="3.0.0">
     <name>mode_B_KI</name>
@@ -1302,7 +1302,7 @@
       <font family="Liberation Sans" style="REGULAR" size="11.0" />
     </font>
     <show_units>false</show_units>
-    <tooltip>Mode:C:KP, limits -100 to 0 SLPM/%</tooltip>
+    <tooltip>Mode:C:KP, limits -100 to -0.1 SLPM/%</tooltip>
   </widget>
   <widget type="textentry" version="3.0.0">
     <name>mode_C_KI</name>
@@ -1389,7 +1389,7 @@
       <font family="Liberation Sans" style="REGULAR" size="11.0" />
     </font>
     <show_units>false</show_units>
-    <tooltip>Mode:D:KP, limits -100 to 0 SLPM/%</tooltip>
+    <tooltip>Mode:D:KP, limits -100 to -0.1 SLPM/%</tooltip>
   </widget>
   <widget type="textentry" version="3.0.0">
     <name>mode_D_KI</name>

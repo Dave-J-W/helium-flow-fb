@@ -112,7 +112,7 @@ void sg_banner(const sg_ctl *c, char *buf, size_t n)
     if (n == 0) return;
     buf[0] = '\0';
     for (i = 0; i < SG_NALARMS; i++) if (c->alarms[i].active) idx[m++] = i;
-    for (i = 1; i < m; i++) {                  /* insertion sort: stable, m <= 15 */
+    for (i = 1; i < m; i++) {                  /* insertion sort: stable, m <= SG_NALARMS */
         int x = idx[i];
         const sg_alarm_slot *ax = &c->alarms[x];
         for (j = i - 1; j >= 0; j--) {
