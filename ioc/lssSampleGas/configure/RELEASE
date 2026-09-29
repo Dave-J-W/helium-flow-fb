@@ -1,0 +1,37 @@
+# RELEASE - Location of external support modules
+#
+# IF YOU MAKE ANY CHANGES to this file you must subsequently do a "make rebuild" in this
+# application's top level directory.
+#
+# Laid out like the other standalone tops in the production synApps support tree (e.g.
+# LabJack-R3-0/configure/RELEASE): the module versions below ARE the production loadout
+# (spec §11.2). The one difference: SUPPORT is not set here, because its real path contains an
+# account name and this repository is public. Set it in configure/RELEASE.local (gitignored):
+#   production:  SUPPORT=<synApps support dir>            (see RELEASE.local.production.example)
+#   bench:       SUPPORT=/home/support, plus overrides of every module path below, because the
+#                bench build uses unversioned directory names (see RELEASE.local.example)
+# Variables may be used before their values are set; the -include lines at the end are read last.
+#
+# This file should ONLY define paths to other support modules, or include statements that pull
+# in similar RELEASE files. Build settings that are NOT module paths belong in CONFIG_SITE.
+
+TEMPLATE_TOP=$(EPICS_BASE)/templates/makeBaseApp/top
+
+-include $(TOP)/../configure/SUPPORT.$(EPICS_HOST_ARCH)
+
+# External modules required for building this IOC
+SNCSEQ=$(SUPPORT)/sequencer-mirror-R2-2-9
+ASYN=$(SUPPORT)/asyn-R4-44-2
+CALC=$(SUPPORT)/calc-R3-7-5
+SSCAN=$(SUPPORT)/sscan-R2-11-6
+STD=$(SUPPORT)/std-R3-6-4
+AUTOSAVE=$(SUPPORT)/autosave-R5-11
+
+# EPICS_BASE usually appears last so other apps can override stuff:
+EPICS_BASE=/usr/local/epics/base
+
+# These lines allow developers to override these RELEASE settings without having to modify
+# this file directly.
+-include $(TOP)/../RELEASE.local
+-include $(TOP)/../RELEASE.$(EPICS_HOST_ARCH).local
+-include $(TOP)/configure/RELEASE.local

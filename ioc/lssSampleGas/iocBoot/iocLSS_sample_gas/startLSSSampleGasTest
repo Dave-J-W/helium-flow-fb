@@ -1,0 +1,12 @@
+#!/bin/bash
+# Commissioning start for 15LSS_sample_gas: run it in a terminal on the IOC host, NOT through
+# start_ioc (docs/ioc/INSTALL.md). Same IOC and database as startLSSSampleGas, but:
+#   - it starts in shadow mode (Par:writeEnable 0): nothing is written to the Alicat until you
+#     press "Live (on)" on the Admin screen;
+#   - its autosave files go to autosave-test/, so nothing from the test (in particular the
+#     shadow setting) carries over to the production start.
+# The IOC console is this terminal; type exit to stop it. Only one 15LSS_sample_gas may run.
+cd "$(dirname "$0")" || exit 1
+mkdir -p autosave-test logs
+export SG_FORCE_SHADOW=1 SG_SAVEDIR=autosave-test
+exec ../../bin/linux-x86_64/lssSampleGas st.cmd.production

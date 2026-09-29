@@ -1,0 +1,5 @@
+# beamline_env.local.sh.example: copy to beamline_env.local.sh (gitignored) and fill in.
+# Sourced by run_ioc_pc.sh for the IOC's Channel Access CLIENT side only (reading the 15IDC PVs).
+# The server side is forced to 127.0.0.1 by run_ioc_pc.sh; do not set EPICS_CAS_* here.
+export EPICS_CA_ADDR_LIST="<beamline broadcast addresses and IOC hosts, space-separated>"
+export EPICS_CA_AUTO_ADDR_LIST=NO

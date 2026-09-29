@@ -4,3 +4,6 @@ __pycache__/
 analysis/J_rows.npy
 # pre-git backups
 *.bak-*
+
+# local beamline CA address list (site IPs): never commit
+ioc/tools/beamline_env.local.sh

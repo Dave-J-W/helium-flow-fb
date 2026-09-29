@@ -1,0 +1,5 @@
+# Production: copy to configure/RELEASE.local on the Linux host (gitignored) and replace the
+# placeholder with the host's synApps support directory. The module versions and EPICS_BASE
+# are already set in configure/RELEASE (the production loadout, spec §11.2), so SUPPORT is the
+# only line needed here.
+SUPPORT=<synApps support dir>

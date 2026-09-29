@@ -1,0 +1,7 @@
+#!/bin/bash
+# Production start script for 15LSS_sample_gas (spec §11.3). start_ioc runs it under procServ
+# without changing directory, so change to this iocBoot directory first: st.cmd.production and
+# autosave use relative paths.
+cd "$(dirname "$0")" || exit 1
+mkdir -p autosave logs
+exec ../../bin/linux-x86_64/lssSampleGas st.cmd.production

@@ -1,0 +1,31 @@
+# st.cmd.pc: THIS PC against the real 15IDC enclosure (Plan 2 task 6). Start it ONLY with
+# ioc/tools/run_ioc_pc.sh (CA client on the beamline list, CA server confined to 127.0.0.1).
+# Read-only unless run_ioc_pc.sh was given --allow-writes: READONLY comes only from
+# LSS_PC_READONLY, which that script sets (0 only with --allow-writes); started any other way
+# the IOC is read-only (the glue allows writes only for READONLY exactly 0).
+# Writes, when allowed, can only go to WRITE_MFC (15IDC:Alicat1:) whatever Cfg:MFC says, and
+# FORCE_SHADOW=1 starts every run with Par:writeEnable 0 (the operator switches Live).
+# The served prefix is LSSPC:, never a beamline prefix; own autosave and log directories.
+< envPaths
+epicsEnvSet("P", "LSSPC:SampleGas:")
+epicsEnvSet("SAVEDIR", "autosave-pc")
+
+# The CA (and PVA) server side confined to this PC here as well, not only in the wrapper
+epicsEnvSet("EPICS_CAS_INTF_ADDR_LIST", "127.0.0.1")
+epicsEnvSet("EPICS_CAS_BEACON_ADDR_LIST", "127.0.0.1")
+epicsEnvSet("EPICS_CAS_AUTO_BEACON_ADDR_LIST", "NO")
+epicsEnvSet("EPICS_PVAS_INTF_ADDR_LIST", "127.0.0.1")
+epicsEnvSet("EPICS_PVAS_BEACON_ADDR_LIST", "127.0.0.1")
+epicsEnvSet("EPICS_PVAS_AUTO_BEACON_ADDR_LIST", "NO")
+
+dbLoadDatabase("$(TOP)/dbd/lssSampleGas.dbd")
+lssSampleGas_registerRecordDeviceDriver(pdbbase)
+
+< save_restore.cmd
+dbLoadRecords("$(TOP)/db/sampleGas.db", "P=$(P),MFC=15IDC:Alicat1:,O2=15IDC:D1Dmm_calc,CYL=,STN=15IDC")
+
+iocInit
+
+create_monitor_set("sampleGas_settings.req", 30, "P=$(P)")
+create_monitor_set("sampleGas_helium.req", 300, "P=$(P)")
+seq sampleGas, "P=$(P),LOGDIR=logs-pc,READONLY=$(LSS_PC_READONLY=1),WRITE_MFC=15IDC:Alicat1:,FORCE_SHADOW=1"

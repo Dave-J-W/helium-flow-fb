@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<!-- Approved screen mockups for the 15LSS_sample_gas IOC (reviewed with the user 2026-09-25/28).
+     The four Phoebus displays of spec §13 follow this layout: 1 simple panel, 2 full panel,
+     3 Admin, 4 Deep admin. Values are illustrative. Open in a browser. -->
+<html><head><meta charset="utf-8"><title>sampleGas screen mockups</title>
+<style>
+body{font-family:Segoe UI,Arial,sans-serif;background:#e8e8e8;margin:16px;color:#222}
+.cap{font-size:13px;color:#555;margin:14px 0 4px}
+.pb{background:#f4f4f4;border:1px solid #999;border-radius:4px;padding:10px;font-size:13px;margin-bottom:12px;max-width:760px}
+.ro{background:#111;border-radius:3px;padding:6px 8px;color:#9fe870;font-family:Consolas,monospace}
+.ro .l{color:#bbb;font-size:11px;font-family:Segoe UI,Arial,sans-serif}
+.ro .s{color:#999;font-size:11px}
+.btn{border:1px solid #777;border-radius:3px;padding:7px 0;text-align:center;background:#fff;font-size:13px}
+.ibtn{border:1px solid #777;border-radius:3px;padding:4px 9px;background:#fff;font-size:12px;display:inline-block}
+.lbl{color:#555;font-size:12px}
+.shb{background:#FAC775;color:#412402;border:1px solid #BA7517;border-radius:3px;padding:1px 6px;font-size:11px;font-weight:600}
+.ban{background:#C0DD97;color:#173404;border-radius:3px;padding:6px 10px;margin-bottom:8px}
+.st{background:#4c9a2a;color:#fff;border-radius:3px;padding:2px 10px;font-weight:600;font-family:Consolas,monospace;font-size:12px}
+.led{width:11px;height:11px;border-radius:50%;background:#639922;display:inline-block}
+.h{font-weight:600;font-size:12px;margin:8px 0 4px}
+.g3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:3px 10px}
+.f{display:flex;justify-content:space-between;align-items:center;gap:4px;margin:2px 0}
+.f span:first-child{font-size:11px;color:#555;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.f input{width:54px;height:20px;font-size:11px;padding:0 3px;flex:none}
+.u{color:#888;font-size:11px;width:34px;flex:none}
+.mono{font-family:Consolas,monospace;font-size:11px;background:#fff;border:1px solid #ccc;border-radius:3px;padding:5px 7px;white-space:pre;overflow:hidden}
+table.t{border-collapse:collapse;width:100%;font-size:11px}
+.t td,.t th{border-bottom:1px solid #ddd;padding:2px 4px;text-align:left;font-weight:400}
+.t th{color:#555}
+.t input{height:20px;font-size:11px;width:100%;padding:0 3px;font-family:Consolas,monospace}
+.grp{border:1px solid #aaa;border-radius:3px;padding:5px 7px;background:#fff}
+</style></head><body>
+
+<p class="cap">1. Simple panel (sampleGas_simple.bob, spec §13.0) — everyday display</p>
+<div class="pb" style="max-width:420px">
+ <div style="display:flex;align-items:center;gap:6px;margin-bottom:8px"><b>Sample gas 15IDC</b><span class="shb" style="margin-left:auto">SHADOW MODE</span></div>
+ <div class="ban">No alarms</div>
+ <div class="ro" style="margin-bottom:6px"><div class="l">Oxygen</div><div style="display:flex;align-items:baseline;gap:6px"><span style="font-size:36px">0.99</span><span>%</span><span style="margin-left:auto;font-size:12px;color:#c0dd97"><span class="led"></span> in range</span></div><div class="s">target 0.99 %</div></div>
+ <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:8px">
+  <div class="ro"><div class="l">Helium flow</div><div style="font-size:20px">0.29 <span style="font-size:11px">SLPM</span></div></div>
+  <div class="ro"><div class="l">Helium left</div><div style="font-size:20px">5.5 <span style="font-size:11px">days</span></div><div class="s">7872 L</div></div>
+ </div>
+ <div style="display:flex;align-items:center;gap:6px;margin-bottom:8px"><span class="st">REGULATE</span><span class="lbl">holding O2 at the target</span></div>
+ <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:5px;margin-bottom:6px">
+  <div class="btn" style="background:#B5D4F4;color:#042C53;font-weight:600">Purge</div>
+  <div class="btn" style="background:#F7C1C1;color:#501313;font-weight:600">Flow Zero</div>
+  <div class="btn" style="color:#aaa">Resume Flow</div>
+ </div>
+ <div style="display:flex;align-items:center" class="lbl"><span>Mode A: Normal lid</span><span class="ibtn" style="margin-left:auto">Full panel…</span></div>
+</div>
+
+<p class="cap">2. Full panel (sampleGas_main.bob, spec §13.1) — expert display</p>
+<div class="pb">
+ <div style="display:flex;align-items:center;gap:6px;margin-bottom:8px"><b>Sample gas 15IDC</b><span style="font-family:Consolas;font-size:11px;color:#555">15IDC:SampleGas:</span><span class="shb" style="margin-left:auto">SHADOW MODE: no writes</span></div>
+ <div class="ban">No alarms</div>
+ <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:5px;margin-bottom:8px">
+  <div class="ro"><div class="l">Oxygen (Sts:O2)</div><div style="font-size:22px">0.994</div><div class="s">% · target 0.99 ± 0.02</div></div>
+  <div class="ro"><div class="l">Helium flow (Sts:Flow)</div><div style="font-size:22px">0.29</div><div class="s">SLPM · expected 0.25 · running</div></div>
+  <div class="ro"><div class="l">Flow setpoint (Sts:SetpointRBV)</div><div style="font-size:22px">0.29</div><div class="s">SLPM · would command 0.291</div></div>
+  <div class="ro"><div class="l">Helium cylinder (He:LeftL)</div><div style="font-size:22px">7872</div><div class="s">L · empty in 5.5 d–5.6 d</div></div>
+ </div>
+ <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px"><span class="st">REGULATE</span><span class="led"></span><span>in range</span><span class="lbl" style="margin-left:8px">epid is holding O2 at the target.</span></div>
+ <div class="mono" style="margin-bottom:8px">PID: CVAL 0.993 %  P 0.012  I 0.269  out 0.291  [0.05…1.00]  settled</div>
+ <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:8px">
+  <label class="lbl">Enclosure mode (Mode)<select style="width:100%"><option>A: Normal lid</option><option>B: Collimator lid</option></select></label>
+  <label class="lbl">O2 target, % (Par:target)<input type="text" value="0.99" style="width:100%"></label>
+ </div>
+ <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:5px;margin-bottom:6px">
+  <div class="btn" style="background:#B5D4F4;color:#042C53;font-weight:600">Purge</div>
+  <div class="btn" style="background:#F7C1C1;color:#501313;font-weight:600">Flow Zero</div>
+  <div class="btn" style="color:#aaa" title="Enabled in OPEN_LOOP (O2 valid) or IDLE (O2 valid, below Par:lidLevel)">Resume Flow</div>
+  <div class="btn">Admin…</div>
+ </div>
+ <div class="lbl" style="margin-bottom:6px">Last action: REGULATE: feedback on</div>
+ <div class="mono" style="height:70px;white-space:normal">[strip chart: Sts:O2 (blue) and Sts:Flow (amber), 30 min, log axes, target line (red dashed)]</div>
+</div>
+
+<p class="cap">3. Admin (sampleGas_admin.bob, spec §13.2) — beamline staff</p>
+<div class="pb">
+ <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:5px 8px;border:1px solid #BA7517;border-radius:3px;background:#FAEEDA;color:#633806;margin-bottom:6px">
+  <b>Writes to the Alicat</b><span class="ibtn" style="background:#FAC775;color:#412402">Shadow (off)</span><span class="ibtn">Live (on)</span><span style="font-size:11px">confirms either way (texts in spec §13.2); the valve never moves at the switch</span>
+ </div>
+ <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:4px"><span class="ibtn">New He cylinder fitted</span><span class="ibtn">Mark new user run</span><span class="ibtn">Release control (→ IDLE)</span><span class="ibtn">Deep admin…</span></div>
+ <div class="h">Parameters (the A-level parameters of spec §9.1)</div>
+ <div class="g3">
+  <div class="f"><span>In-range tolerance</span><input value="0.02"><span class="u">%</span></div>
+  <div class="f"><span>Handoff margin Δ</span><input value="-0.04"><span class="u">%</span></div>
+  <div class="f"><span>Purge flow</span><input value="20"><span class="u">SLPM</span></div>
+  <div class="f"><span>Timeout margin</span><input value="1.3"><span class="u">×</span></div>
+  <div class="f"><span>Feedback delay</span><input value="0"><span class="u">s</span></div>
+  <div class="f"><span>Settle timeout</span><input value="7200"><span class="u">s</span></div>
+  <div class="f"><span>Flow-high MINOR</span><input value="1.5"><span class="u">×exp</span></div>
+  <div class="f"><span>Flow-high MAJOR</span><input value="2.0"><span class="u">×exp</span></div>
+  <div class="f"><span>Pinned → MAJOR</span><input value="600"><span class="u">s</span></div>
+  <div class="f"><span>O2 abnormal by</span><input value="0.3"><span class="u">%</span></div>
+  <div class="f"><span>Cylinder warn</span><input value="24"><span class="u">h</span></div>
+  <div class="f"><span>Cylinder alarm</span><input value="6"><span class="u">h</span></div>
+ </div>
+ <div class="h">PID gains and limits per enclosure mode</div>
+ <table class="t"><tr><th>Mode</th><th>KP (at 0.99 %)</th><th>KI (1/s)</th><th>Max flow</th><th>Min flow</th></tr>
+  <tr><td>A: Normal lid</td><td><input value="-9.3"></td><td><input value="8.8e-4"></td><td><input value="1.0"></td><td><input value="0.05"></td></tr>
+  <tr><td>B: Collimator lid</td><td><input value="-10"></td><td><input value="1.4e-3"></td><td><input value="2.0"></td><td><input value="0.3"></td></tr>
+  <tr><td>C: Spare C</td><td><input value="-9.3"></td><td><input value="8.8e-4"></td><td><input value="1.0"></td><td><input value="0.05"></td></tr>
+  <tr><td>D: Spare D</td><td><input value="-9.3"></td><td><input value="8.8e-4"></td><td><input value="1.0"></td><td><input value="0.05"></td></tr></table>
+ <div class="h">Overrides: count 2 <span class="ibtn" style="padding:0 7px">Reset count</span></div>
+ <div class="mono">14:02:11  MFC was on hold, resumed; setpoint 0.29 re-sent
+09:15:40  ramp rate 0 (= no ramp, instant) → 5 SLPM/s (purge maximum)</div>
+ <div class="h">Helium usage report (He:Rep:Text)</div>
+ <div class="mono">last 60 days (2026-07-28 → 2026-09-26): 6214 L dispensed (5980 L in user runs), 1 cylinder, 0.78 cyl-equiv.
+  #1  2026-09-19 08:10 → 2026-09-24 17:52   23 purges   3120 L
+  #2  2026-09-25 09:15 → in progress         4 purges    410 L  (open)</div>
+ <div class="h">Live internals</div>
+ <div class="mono">epid FBON 1  VAL 0.990  CVAL 0.9931  OVAL 0.291  DRVL 0.050  DRVH 1.000
+forecast 3 d: 5.5 d   1 d: 5.6 d   0.25 d: 5.2 d   median 5.5 d</div>
+</div>
+
+<p class="cap">4. Deep admin (sampleGas_deep.bob, spec §13.3) — instrument scientist</p>
+<div class="pb">
+ <div class="h" style="margin-top:0">Linked PV names</div>
+ <table class="t"><tr><th style="width:80px"></th><th>Edit (Cfg:*)</th><th>In use (Cfg:Active:*)</th><th style="width:34px">Conn.</th><th>Default (Cfg:Default:*)</th></tr>
+  <tr><td>Alicat prefix</td><td><input value="15IDC:Alicat1:"></td><td>15IDC:Alicat1:</td><td><span class="led"></span></td><td style="color:#999">15IDC:Alicat1:</td></tr>
+  <tr><td>O2 reading</td><td><input value="15IDC:D1Dmm_calc"></td><td>15IDC:D1Dmm_calc</td><td><span class="led"></span></td><td style="color:#999">15IDC:D1Dmm_calc</td></tr>
+  <tr><td>Cylinder P</td><td><input placeholder="none"></td><td style="color:#999">none</td><td><span class="led" style="background:#B4B2A9"></span></td><td style="color:#999">none</td></tr>
+  <tr><td>Station label</td><td><input value="15IDC"></td><td>15IDC</td><td></td><td style="color:#999">15IDC</td></tr></table>
+ <div style="display:flex;gap:6px;align-items:center;margin:5px 0"><span class="ibtn">Apply PV names</span><span class="ibtn">Restore defaults</span><span style="color:#555;font-size:11px">Cfg:Status · Cfg:Pending shown as "unapplied edits"</span></div>
+ <div class="h">Enclosure modes</div>
+ <table class="t"><tr><th>Slot</th><th>Name</th><th>Base flow (SLPM)</th><th>Exponent n</th></tr>
+  <tr><td>A</td><td><input value="Normal lid"></td><td><input value="0.25"></td><td><input value="1.0"></td></tr>
+  <tr><td>B</td><td><input value="Collimator lid"></td><td><input value="0.84"></td><td><input value="0.53"></td></tr>
+  <tr><td>C, D</td><td><input value="Spare C / Spare D"></td><td><input value="0.25"></td><td><input value="1.0"></td></tr></table>
+ <div class="h">Thresholds, timing and limits: 51 D-level parameters in the nine groups of spec §13.3</div>
+ <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px">
+  <div class="grp"><div class="h" style="margin:0 0 2px">Enclosure and purge</div><div class="lbl">V, purgeLag, handoffHold, handoffFlowTol, purgeTimeoutMin, purgeTimeoutMax, ambientRef, rampMaxPurge, rampMinHandoff</div></div>
+  <div class="grp"><div class="h" style="margin:0 0 2px">Lid check (during purge)</div><div class="lbl">dropSkipLevel, lidOnsetFrac, lidOnsetMax, lidWindow, openSlopeFrac, lidCurvMin</div>
+   <div class="h" style="margin:6px 0 2px">Lid detector (lid lifted)</div><div class="lbl">lidLevel, lidFilter, lidSlope, lidSlopeWindow, lidArmLevel</div></div>
+  <div class="grp"><div class="h" style="margin:0 0 2px">PID</div><div class="lbl">avgN, pidScan, odel, gainSchedule, fineBand, fineKPx, fineKIx, hardCeiling</div></div>
+  <div class="grp"><div class="h" style="margin:0 0 2px">Settling</div><div class="lbl">progressMin, stallGrace, stallWindow, slopeAvgN, stallTime, flowSteadyBand, o2SteadyRate</div></div>
+  <div class="grp"><div class="h" style="margin:0 0 2px">Alarms</div><div class="lbl">alarmDelay, flowAlarmDelay, flowLowX, mismatchAbs, mismatchFrac, mismatchMargin</div>
+   <div class="h" style="margin:6px 0 2px">O2 reading checks</div><div class="lbl">frozenTime, o2Min, o2Max</div></div>
+  <div class="grp"><div class="h" style="margin:0 0 2px">MFC hold monitor</div><div class="lbl">holdDetect, holdRetries, holdRetryInterval, holdSlowRetry</div>
+   <div class="h" style="margin:6px 0 2px">Helium</div><div class="lbl">cylCapacityL, reportDays, runGap</div></div>
+ </div>
+ <div class="lbl" style="margin-top:6px">Each field: short label, entry box, unit (from ioc/tools/sg_pvs.py).</div>
+</div>
+</body></html>

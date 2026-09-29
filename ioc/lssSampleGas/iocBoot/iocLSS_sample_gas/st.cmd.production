@@ -1,0 +1,37 @@
+# st.cmd.production: the production IOC 15LSS_sample_gas on the Linux soft-IOC host (spec §5.5,
+# §11.3). Started by start_ioc through startLSSSampleGas (which cd's here first).
+#
+# LIVE. Unlike st.cmd.pc there is no read-only lock, no forced shadow start and no pinned write
+# target (user direction 2026-09-28: in production the failure state is not doing anything).
+# Par:writeEnable is autosaved and defaults to 1 in the database, so a brand-new install and
+# every restart (including a reboot via start_ioc -b) act; the restart rule (§8.15) resumes
+# regulation bumplessly when O2 is valid and the setpoint is > 0. If the Alicat is not connected
+# yet, the controller waits for it (Alm:Mismatch MAJOR on the banner) and then decides; it does
+# not settle in IDLE. Writes go to the Alicat named in Cfg:MFC; changing it keeps writes as they
+# were (the "writes disabled on an Alicat change" rule is for the PC trial only).
+# The CA server is NOT confined here: this IOC serves 15IDC:SampleGas: on the beamline network.
+#
+# Commissioning start (startLSSSampleGasTest, in a terminal, never under start_ioc): it sets
+# SG_FORCE_SHADOW=1 (start with Par:writeEnable 0) and SG_SAVEDIR=autosave-test, so the test's
+# settings, including that 0, never reach the production autosave (a production start would
+# otherwise restore shadow mode and not act). Unset, both default to the live behaviour above.
+< envPaths
+epicsEnvSet("P", "15IDC:SampleGas:")
+epicsEnvSet("SAVEDIR", "$(SG_SAVEDIR=autosave)")
+# He: history arrays (6000 doubles) and Log:Text exceed the 16 kB default
+epicsEnvSet("EPICS_CA_MAX_ARRAY_BYTES", "100000")
+
+dbLoadDatabase("$(TOP)/dbd/lssSampleGas.dbd")
+lssSampleGas_registerRecordDeviceDriver(pdbbase)
+
+< save_restore.cmd
+dbLoadRecords("$(TOP)/db/sampleGas.db", "P=$(P),MFC=15IDC:Alicat1:,O2=15IDC:D1Dmm_calc,CYL=,STN=15IDC")
+# 15IDE (deferred): a second dbLoadRecords with its own P, and per-station .req wrappers
+# (see save_restore.cmd) before enabling it.
+#dbLoadRecords("$(TOP)/db/sampleGas.db", "P=15IDE:SampleGas:,MFC=,O2=,CYL=,STN=15IDE")
+
+iocInit
+
+create_monitor_set("sampleGas_settings.req", 30, "P=$(P)")
+create_monitor_set("sampleGas_helium.req", 300, "P=$(P)")
+seq sampleGas, "P=$(P),LOGDIR=logs,READONLY=0,FORCE_SHADOW=$(SG_FORCE_SHADOW=0)"

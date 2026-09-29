@@ -1,0 +1,11 @@
+# Copy to RELEASE.local and fill in. RELEASE.local is gitignored: site paths stay out of the repo.
+# Bench (MinGW):   SUPPORT=/home/support   EPICS_BASE=/home/base-7.0.8.1
+# Production:      SUPPORT=<synApps support dir>   EPICS_BASE=/usr/local/epics/base
+SUPPORT=<support>
+EPICS_BASE=<base>
+SNCSEQ=$(SUPPORT)/seq
+STD=$(SUPPORT)/std
+CALC=$(SUPPORT)/calc
+ASYN=$(SUPPORT)/asyn
+AUTOSAVE=$(SUPPORT)/autosave
+SSCAN=$(SUPPORT)/sscan

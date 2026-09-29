@@ -1,0 +1,15 @@
+# Copy to CONFIG_SITE.local and fill in. CONFIG_SITE.local is gitignored: site paths stay out of
+# the repo. On the MinGW bench, ioc/tools/build.sh writes it for its worktree when it is missing.
+#
+# Bench (MinGW): the repo path contains a space, and base's link rules build their -L flags from
+# $(abspath $(INSTALL_LIB)), which resolves the build junction back to the spaced path. Installing
+# outside the repo keeps every -L path space-free (the sources and the O.<arch> build directories
+# stay in the repo):
+#   INSTALL_LOCATION=/home/<user>/bench/<worktree>-lssSampleGas-install
+#   CONFIG_INSTALLS =
+# The second line stops the configure/ directory installing its RELEASE* and RULES_BUILD files
+# into INSTALL_LOCATION: base's config-file install rule passes $(abspath <source>), the spaced
+# repo path again. Nothing needs them installed (no other top builds against this one).
+# Production: leave both unset (installs into the top itself).
+INSTALL_LOCATION=/home/<user>/bench/<worktree>-lssSampleGas-install
+CONFIG_INSTALLS =
