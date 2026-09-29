@@ -1,5 +1,9 @@
 TOP=../..
 include $(TOP)/configure/CONFIG
+# The sources are C99: say so rather than rely on the compiler's default. An older gcc defaults
+# to gnu89 and stops on for-loop declarations and isfinite/isnan (seen on the production host,
+# 2026-09-29). Checked: the IOC builds and its tests pass with -std=c99 and -std=gnu99.
+USR_CFLAGS += -std=gnu99
 # C99-conforming printf on MinGW (exact decimal expansion; sgFmt relies on it)
 USR_CPPFLAGS_WIN32 += -D__USE_MINGW_ANSI_STDIO=1
 

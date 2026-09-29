@@ -21,7 +21,8 @@ h3 { font-size: 11.5pt; margin-top: 16px; page-break-after: avoid; }
 h4 { font-size: 10.5pt; page-break-after: avoid; }
 code { font-family: Consolas, monospace; font-size: 9pt; background: #f2f2f2; padding: 0 2px; }
 pre { background: #f6f6f6; border: 1px solid #ddd; padding: 6px 8px; font-size: 8.5pt;
-      line-height: 1.25; white-space: pre; overflow: hidden; page-break-inside: avoid; }
+      line-height: 1.25; white-space: pre-wrap; overflow-wrap: anywhere;
+      page-break-inside: avoid; }   /* long lines (full paths) wrap instead of being cut off */
 pre code { background: none; padding: 0; }
 table { border-collapse: collapse; margin: 8px 0; font-size: 8.8pt; width: 100%; page-break-inside: auto; }
 th, td { border: 1px solid #bbb; padding: 3px 5px; vertical-align: top; text-align: left; }
