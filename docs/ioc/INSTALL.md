@@ -10,38 +10,60 @@ below 10 % and the Alicat setpoint above 0) it takes over the Alicat within a co
 The first start below is therefore a shadow start, which writes nothing. Stop the old Phoebus
 timer script before you switch to live: two writers fight over the setpoint.
 
-## 1. Make the package (on the PC with the repo)
+## 1. Get the code onto the IOC host
 
-From Git Bash, in the repo worktree (the committed state is what gets packaged):
+The IOC is public at `https://github.com/Dave-J-W/helium-flow-fb` (branch `main`). The EPICS
+top is the repo's `ioc/lssSampleGas`; it goes to `<support>/ChemMat/lssSampleGas`.
+
+**A. From GitHub** (if the host reaches github.com):
 
 ```bash
-git -c core.autocrlf=false archive --format=tar.gz --prefix=lssSampleGas/ -o ~/lssSampleGas.tar.gz HEAD:ioc/lssSampleGas
-git -c core.autocrlf=false archive --format=zip -o ~/sampleGas_screens.zip HEAD:ioc/screens
+git clone https://github.com/Dave-J-W/helium-flow-fb.git ~/helium-flow-fb
+git -C ~/helium-flow-fb log -1 --oneline          # note the version you install
+mkdir -p <support>/ChemMat
+rsync -a ~/helium-flow-fb/ioc/lssSampleGas <support>/ChemMat/
 ```
 
-Keep `-c core.autocrlf=false`: archiving a subdirectory skips the repo's `.gitattributes`, and
-on a Windows checkout `git archive` would otherwise write CRLF line endings. `#!/bin/bash\r` and
-`EPICS_BASE=...\r` then break the start scripts and the build on Linux.
-
-Copy `lssSampleGas.tar.gz` to the IOC host (e.g. `scp ~/lssSampleGas.tar.gz <user>@<ioc-host>:`),
-and `sampleGas_screens.zip` to wherever your Phoebus displays live.
-
-## 2. Unpack and configure (on the IOC host)
+**B. Without internet on the host:** make a package on the PC with the repo (Git Bash, in the
+repo worktree; the committed state is what gets packaged), then copy it over (e.g. `scp`):
 
 ```bash
-cd <support>/ChemMat
-tar xzf ~/lssSampleGas.tar.gz          # creates <support>/ChemMat/lssSampleGas
-cd lssSampleGas
+git -c core.autocrlf=false archive --format=tar.gz \
+    --prefix=lssSampleGas/ -o ~/lssSampleGas.tar.gz HEAD:ioc/lssSampleGas
+git -c core.autocrlf=false archive --format=zip \
+    -o ~/sampleGas_screens.zip HEAD:ioc/screens
+```
+
+and on the host:
+
+```bash
+cd <support>/ChemMat && tar xzf ~/lssSampleGas.tar.gz
+```
+
+Keep `-c core.autocrlf=false`. Archiving a subdirectory skips the repo's `.gitattributes`, so
+on a Windows checkout `git archive` would otherwise write CRLF line endings. A trailing `\r`
+(in `#!/bin/bash\r` or `EPICS_BASE=...\r`) breaks the start scripts and the build on Linux. A
+clone on the host (A) has no such problem.
+
+The screens are the repo's `ioc/screens/*.bob` (or `sampleGas_screens.zip`): copy them to
+wherever your Phoebus displays live (section 5).
+
+## 2. Configure (on the IOC host)
+
+```bash
+cd <support>/ChemMat/lssSampleGas
 cp configure/RELEASE.local.production.example configure/RELEASE.local
 nano configure/RELEASE.local           # set SUPPORT=<support>
 ```
 
-`configure/RELEASE` already names the module versions (seq R2-2-9 as `sequencer-mirror-R2-2-9`,
-std R3-6-4, calc R3-7-5, asyn R4-44-2, autosave R5-11, sscan R2-11-6; base
-`/usr/local/epics/base`). Check they exist:
+`configure/RELEASE` already names the module versions: seq R2-2-9 (as
+`sequencer-mirror-R2-2-9`), std R3-6-4, calc R3-7-5, asyn R4-44-2, autosave R5-11, sscan
+R2-11-6, and base `/usr/local/epics/base`. Check they exist:
 
 ```bash
-ls -d <support>/{sequencer-mirror-R2-2-9,std-R3-6-4,calc-R3-7-5,asyn-R4-44-2,autosave-R5-11,sscan-R2-11-6}
+cd <support>
+ls -d sequencer-mirror-R2-2-9 std-R3-6-4 calc-R3-7-5 \
+      asyn-R4-44-2 autosave-R5-11 sscan-R2-11-6
 ```
 
 ## 3. Build
@@ -90,9 +112,11 @@ including shadow mode, carries over to the production start. Expect, within a fe
 From another terminal:
 
 ```bash
-caget 15IDC:SampleGas:Sts:State 15IDC:SampleGas:Sts:O2 15IDC:SampleGas:Sts:Flow \
-      15IDC:SampleGas:Sts:SetpointRBV 15IDC:SampleGas:Sts:WriteEnable 15IDC:SampleGas:Sts:TickAge
-caget -S 15IDC:SampleGas:Sts:Banner
+P=15IDC:SampleGas:
+caget ${P}Sts:State ${P}Sts:O2 ${P}Sts:Flow ${P}Sts:SetpointRBV \
+      ${P}Sts:WriteEnable ${P}Sts:TickAge
+caget -S ${P}Sts:Banner
+cd <support>/ChemMat/lssSampleGas/iocBoot/iocLSS_sample_gas
 tail -f logs/sampleGas_15IDC_*.log
 ```
 
@@ -153,6 +177,21 @@ Alicat keeps its flow).
 
 procServ runs with `--noautorestart`: after a crash, restart it with `start_ioc`. The Alicat
 holds its last setpoint meanwhile, and the restart resumes without a bump.
+
+## 8. Updating an installed IOC
+
+```bash
+git -C ~/helium-flow-fb pull
+git -C ~/helium-flow-fb log -1 --oneline
+rsync -a ~/helium-flow-fb/ioc/lssSampleGas <support>/ChemMat/
+cd <support>/ChemMat/lssSampleGas && make 2>&1 | tee build.log
+```
+
+`rsync` without `--delete` keeps what the repo doesn't have: `configure/RELEASE.local`, the
+`autosave/` and `autosave-test/` settings, and `logs/`. Then restart the IOC to load the new
+build: `start_ioc 15LSS_sample_gas`, or `exit` in its console and start it again. The restart
+is bumpless. Without internet, repeat section 1B and unpack over the old copy, which also keeps
+those files.
 
 ## Troubleshooting
 

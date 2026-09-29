@@ -107,7 +107,12 @@ authority; the user's decisions of 2026-09-28 are written into it.
    - Stop condition for each: Flow Zero, then Shadow, then `exit`.
 8. **Spec-conformance audit** (user request): a table, spec §5-§14 → file:line or test → met or deviation. Fix each deviation, or write it into the spec as a user decision. Then the final whole-branch review of `ioc-plan2`.
 9. **Regenerate the spec PDF** (`tools/md2pdf.py`, run from PowerShell) — it is stale.
-10. **Merge and push** only when the user says so. Branch `ioc-plan3`'s history contains the Windows account name in commit `e61328b` (a plan file). The pushed history must not contain it: squash-merge into `main`, or rewrite that commit, then grep `git log -p` for the name before pushing to the public `Dave-J-W/helium-flow-fb`.
+10. **Publishing (first push done 2026-09-29, `ff538a5` on `main`, as the user chose: one squashed commit).** To update GitHub later, never push `ioc-plan2` itself (its history holds the name). Instead:
+    1. Scan the tree for the private names: the Windows account, the production account and the PC's host name. They are kept in the local memory, never in the repo, since a file naming them would itself leak them. Use `git grep -I -i -E '<names>' HEAD`, and for binaries `git show HEAD:<f> | grep -a`. **Stop on any hit: don't push.**
+    2. Build the squash: `NEW=$(git commit-tree 'HEAD^{tree}' -p origin/main -F msg.txt)`.
+    3. Check its author is the noreply address, then `git push origin $NEW:refs/heads/main` and `git branch -f main origin/main`.
+
+    Push only with the user's go. The original instruction, kept for the record: **Merge and push** only when the user says so. Branch `ioc-plan3`'s history contains the Windows account name in commit `e61328b` (a plan file). The pushed history must not contain it: squash-merge into `main`, or rewrite that commit, then grep `git log -p` for the name before pushing to the public `Dave-J-W/helium-flow-fb`.
 
 ## 4. Production install (Linux soft-IOC host, spec §11, §15)
 
