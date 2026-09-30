@@ -5,7 +5,23 @@ are in the Claude skills `cmc-epics-ioc` and `reference-trace-replay-port`; this
 about finishing THIS project. The spec (`docs/ioc/15LSS_sample_gas_IOC_spec.md`) is the
 authority; the user's decisions of 2026-09-28 are written into it.
 
-## 0. State on 2026-09-29, evening (read before the rest; the rest is older)
+## 0a. State on 2026-09-30 (supersedes 0 where they differ)
+
+- **Everything in 0's "still to do" 1-4 is done:** merged; bench regression all green (new
+  `ioc/test/test_fixes.py`, 7/7); `test_compare` sc01/02/03/08 pass; short scenario set 7/7; long
+  set running since 00:15 (log `ioc/test/results/long-set-20260930.log`; 8/10 passed by 11:00).
+  The bumpless PID start is scoped to restarts and Resume Flow (spec §8.11, `4a143a0`).
+- **GitHub `main` = `3ba65b9`,** then this update. The user said "keep pushing": push each set of
+  `ioc-fixes` changes as a squash behind the scan gate.
+- **Host compiler:** `make` ran on chemmat-C92, whose `/usr/bin/gcc` is 11.5 and whose base
+  `CONFIG_SITE` has no `-std`/`-ansi`. The errors were gcc ≤ 4.4's (no columns, "used outside
+  C99 mode"), so they came from a cross target that base is built for, compiled by an old cross
+  gcc. Fixed: `CROSS_COMPILER_TARGET_ARCHS =` in `configure/CONFIG_SITE` (host only). Checked in
+  WSL with base told it has a cross target: the old tree builds `O.linux-x86_64-debug` and
+  fails, the new one builds host only, and its tests pass.
+- **Not tested yet** (bench-regression concerns): an Alicat-only outage with the O2 still up (the
+  plant sim serves both from one process); a second writer that lands late in the PID period;
+  D1a, D3, G3.
 
 - **Branches.** `ioc-fixes` (worktree `Documents\Claude Locals\o2-purge-fixes`) is now the most complete. It contains all of `ioc-plan2` plus:
   - the conformance-audit fix round (`docs/ioc/CONFORMANCE.md` §2, with the user's decisions G1, G2 = MAJOR, G3 and D5);
