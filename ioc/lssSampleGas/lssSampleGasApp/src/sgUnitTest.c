@@ -1263,6 +1263,45 @@ static int t_pid_bumpless(void)
     return 0;
 }
 
+/* §8.11 scope of the fully bumpless start: seeded after the restart decision and Resume Flow
+   from IDLE; after HANDOFF epid's own start (cfg.SEED = 0), as the reference. Plan 4 Task 3
+   (sc01): seeding at the handoff clamped I at DRVL, started the integral ~0.2 SLPM low and let O2
+   overshoot to 1.03 % with a MINOR alarm the reference does not raise. */
+static int t_seed_scope(void)
+{
+    const char *T = "F3c bumpless seed scope";
+    sg_inputs in = base(0.5);
+    sg_epid_cfg cfg;
+    char why[SG_MSG];
+    double t;
+    /* restart into REGULATE: seeded */
+    newCtl();
+    in.sp = 0.3; in.flow = 0.3;
+    sg_set_inputs(&C, &in);
+    sg_restart(&C, 10);
+    tickAt(&in, 10);
+    memset(&cfg, 0xff, sizeof cfg);
+    CHECK(T, C.state == SG_REGULATE && sg_pid_prepare(&C, &cfg) == 1 && cfg.SEED == 1,
+          "restart: state %d SEED %d", C.state, cfg.SEED);
+    /* OPEN_LOOP -> Resume Flow -> HANDOFF -> REGULATE: not seeded */
+    sg_enter(&C, SG_OPEN_LOOP, "test");
+    tickO2(&in, 0.5, 11);
+    CHECK(T, sg_op_resume_flow(&C, why, sizeof why) == 1 && C.state == SG_HANDOFF,
+          "resume from OPEN_LOOP: state %d ('%s')", C.state, why);
+    in.flow = 0.25;
+    for (t = 12; t <= 20 && C.state != SG_REGULATE; t++) tickO2(&in, 0.5, t);
+    memset(&cfg, 0xff, sizeof cfg);
+    CHECK(T, C.state == SG_REGULATE && sg_pid_prepare(&C, &cfg) == 1 && cfg.SEED == 0,
+          "after HANDOFF: state %d SEED %d", C.state, cfg.SEED);
+    /* Resume Flow from IDLE: seeded */
+    newCtl();
+    in = base(0.5);
+    CHECK(T, resumeFromIdle(&in, 0.5, 0.3) == 1 && C.state == SG_REGULATE, "resume from IDLE");
+    memset(&cfg, 0xff, sizeof cfg);
+    CHECK(T, sg_pid_prepare(&C, &cfg) == 1 && cfg.SEED == 1, "resume from IDLE: SEED %d", cfg.SEED);
+    return 0;
+}
+
 /* devEpidSoft's PID processing at FBON 0 -> 1 (std stdApp/src/devEpidSoft.c, epidFeedbackMode_PID
    with FBOP 0): I read from OUTL, no integration, output P + I clamped, then the ODEL deadband
    against the record's previous OVAL. KD = 0. Returns the record's new OVAL. */
@@ -1536,7 +1575,7 @@ int main(void)
         t_flow_high, t_flow_low, t_not_reached, t_pinned_low, t_cyl_low, t_total_backwards,
         t_total_nan, t_ledger_disconnected, t_new_cylinder_disconnected, t_o2_nan, t_restart_mfc, t_restart_lid,
         t_command_nan, t_follow, t_follow_ramp, t_nocompute, t_write_fail,
-        t_pid_bumpless, t_pid_bumpless_seed, t_channels_changed, t_channels_changed_midtick, t_helium_io, t_flow_steady, t_ledger_seq, t_cyl_minmax,
+        t_pid_bumpless, t_seed_scope, t_pid_bumpless_seed, t_channels_changed, t_channels_changed_midtick, t_helium_io, t_flow_steady, t_ledger_seq, t_cyl_minmax,
     };
     const int n = (int)(sizeof tests / sizeof tests[0]);
     int i, fails = 0;

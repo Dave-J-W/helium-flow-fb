@@ -133,7 +133,7 @@ void sg_reinit(sg_ctl *c, double now)
     c->o2 = NAN; c->o2ok = 0; c->lastO2 = NAN; c->sameCount = 0; c->frozen = 0;
     c->nO2 = 0; c->nRate = 0; c->maxRate = 0; c->aboveCount = 0; c->lidArmed = 0;
     c->nAvg = 0; c->blind = 0;
-    c->lastCmd = NAN; c->lastCmdTime = 0; c->flowAtCmd = 0; c->followStep = 0;
+    c->lastCmd = NAN; c->lastCmdTime = 0; c->flowAtCmd = 0; c->followStep = 0; c->seedStart = 0;
     c->spSeen = NAN; c->spChangeT = 0; c->flowAtSpChange = 0;
     c->holdSec = 0; c->holdAttempts = 0; c->nextHoldAttempt = 0; c->holdRecovering = 0;
     c->pinnedSec = 0; c->pinnedLowSec = 0; c->heartbeat = 0;
@@ -558,7 +558,7 @@ static void doHandoff(sg_ctl *c)
         }
     } else if (c->now - sd->t1 >= p->fbDelay) {
         sg_enter(c, SG_REGULATE, "feedback on");
-        sg_config_epid(c); c->epid.FBON = 1;
+        sg_config_epid(c); c->epid.FBON = 1; c->seedStart = 0;   /* epid's own start (§8.11) */
     }
 }
 
@@ -709,7 +709,7 @@ void sg_restart(sg_ctl *c, double now)
     else if (valid && in->o2 < p->lidLevel && in->sp > 0) {
         c->lastCmd = in->sp; c->lastCmdTime = now; c->flowAtCmd = in->flow; c->followStep = 0;
         sg_enter(c, SG_REGULATE, "restart: O2 valid and setpoint > 0, resume regulation (§4.7)");
-        sg_config_epid(c); c->epid.FBON = 1;
+        sg_config_epid(c); c->epid.FBON = 1; c->seedStart = 1;   /* fully bumpless (§8.11) */
     } else if (in->sp <= 0) sg_enter(c, SG_IDLE, "restart: setpoint is 0 (§4.7)");
     else if (!valid) sg_enter(c, SG_OPEN_LOOP, "restart: O2 invalid (§4.7)");
     /* G1 (user decision 2026-09-29, beyond the reference, whose IDLE here left the Alicat at up
@@ -772,7 +772,7 @@ int sg_op_resume_flow(sg_ctl *c, char *why, size_t n)
         c->lastCmd = c->in.sp; c->lastCmdTime = c->now; c->flowAtCmd = c->in.flow; c->followStep = 0;
         c->epid.OVAL = c->lastCmd;
         sg_enter(c, SG_REGULATE, "operator pressed Resume Flow");
-        sg_config_epid(c); c->epid.FBON = 1;
+        sg_config_epid(c); c->epid.FBON = 1; c->seedStart = 1;   /* fully bumpless (§8.11) */
         return 1;
     }
     if (why && n) snprintf(why, n, "Resume Flow ignored in %s", stateName(c->state));

@@ -103,10 +103,17 @@ def bench_ioc_processes():
 
 
 class Bench:
-    def __init__(self, noise=True, seed=None, second_plant=False, write_enable=1, tag='bench'):
+    """plant_first=False starts only the IOC (no plant: the IOC waits for the Alicat, spec §8.15
+    step 1); start the plant later with start_plant(preset=...). ioc_env: extra environment for
+    the IOC (e.g. {'FORCE_SHADOW': '1'}, which st.cmd passes to the program)."""
+
+    def __init__(self, noise=True, seed=None, second_plant=False, write_enable=1, tag='bench',
+                 plant_first=True, ioc_env=None):
         self.noise, self.seed, self.second_plant = noise, seed, second_plant
         self.write_enable = write_enable
         self.tag = tag
+        self.plant_first = plant_first
+        self.ioc_env = dict(ioc_env or {})
         self.plant_proc = self.ioc_proc = None
         self._pvs = {}
         self._watches = []
@@ -121,7 +128,8 @@ class Bench:
             os.remove(f)              # each Bench starts from database defaults
         self.mark_log()
         try:
-            self.start_plant()
+            if self.plant_first:
+                self.start_plant()
             self.start_ioc()
             if self.write_enable:
                 self.put(self.p('SIM') + 'Par:writeEnable', 1)
@@ -152,7 +160,8 @@ class Bench:
         return f
 
     # ------------------------------------------------------------------ plant
-    def start_plant(self):
+    def start_plant(self, preset=None):
+        """preset: start the plant already at steady state at this flow (plant_sim --preset)."""
         if plant_sim_processes():
             raise BenchError('a plant_sim.py process already exists (P4-R3): '
                              + ', '.join(str(p.pid) for p in plant_sim_processes()))
@@ -165,6 +174,8 @@ class Bench:
             args.append('--no-noise')
         if self.second_plant:
             args.append('--second')
+        if preset is not None:
+            args += ['--preset', str(preset)]
         out = self._outfile('plant')
         self.plant_proc = subprocess.Popen(args, cwd=str(HERE), env=dict(os.environ), stdin=subprocess.DEVNULL,
                                            stdout=out, stderr=subprocess.STDOUT)
@@ -192,7 +203,7 @@ class Bench:
                              + ', '.join(str(p.pid) for p in bench_ioc_processes()))
         if _port_answers(IOC_PORT):
             raise BenchError(f'something already listens on 127.0.0.1:{IOC_PORT}')
-        env = dict(os.environ, MSYSTEM='MINGW64', CHERE_INVOKING='1')
+        env = dict(os.environ, MSYSTEM='MINGW64', CHERE_INVOKING='1', **self.ioc_env)
         out = self._outfile('ioc')
         # stdin stays an open pipe: the IOC shell exits at EOF on stdin
         self.ioc_proc = subprocess.Popen([MSYS_BASH, '-l', 'ioc/tools/run_ioc.sh'], cwd=str(REPO), env=env,

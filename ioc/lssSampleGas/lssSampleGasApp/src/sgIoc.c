@@ -1186,12 +1186,16 @@ static void epidStep(sg_station *s, const sg_epid_cfg *cfg)
 
     /* bumpless start: epid reads PID:Out through OUTL into I on its FBON 0 -> 1, i.e. when the
        record was last processed with FBON 0 (FBOP) -- including the first step after IOC start.
-       PID:Out = lastCmd - P makes the first output lastCmd; ODEL 0 for this one processing keeps
-       the deadband from holding the stale OVAL instead (sgCore.h sg_epid_cfg). */
+       After a restart or Resume Flow (cfg->SEED), PID:Out = lastCmd - P makes the first output
+       lastCmd; ODEL 0 for this one processing keeps the deadband from holding the stale OVAL
+       instead. After HANDOFF, PID:Out = lastCmd: epid's own start, as the reference (§8.11;
+       sgCore.h sg_epid_cfg). */
     if (cfg->FBON && !(fbop != 0)) {
-        i0 = sg_pid_bumpless_i(cfg);
-        if (isfinite(i0)) putD(&s->pub[PID_OUT].a, i0);
-        odel = 0;
+        if (cfg->SEED) {
+            i0 = sg_pid_bumpless_i(cfg);
+            if (isfinite(i0)) putD(&s->pub[PID_OUT].a, i0);
+            odel = 0;
+        } else if (isfinite(cfg->OUTL)) putD(&s->pub[PID_OUT].a, cfg->OUTL);
     }
     putD(&s->in[IN_PID_CVAL], cfg->CVAL);
 

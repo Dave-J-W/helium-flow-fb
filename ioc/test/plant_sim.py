@@ -138,20 +138,34 @@ def _validate_enum(value, states, pv_label):
 # put() callback factories. Each returns an async (group, instance, value) -> new_value
 # function, per the caproto putter contract described above.
 
+async def _count_alicat_put(group, what, value):
+    """Count a put to one of the Alicat's writable PVs (<W>AlicatPuts) and log it, so a test can
+    prove "no put" without depending on when its own CA monitor connected (a put made in the
+    instant a client connects is otherwise indistinguishable from the connection value)."""
+    group.alicat_puts += 1
+    print(f'plant_sim.py: {time.strftime("%H:%M:%S")} put {what} = {value} '
+          f'(Alicat put #{group.alicat_puts})', file=sys.stderr, flush=True)
+    await group.AlicatPuts.write(group.alicat_puts, verify_value=False)
+
+
 def mk_put_setpoint(plant):
     async def _put(group, instance, value):
         value = _finite(value)
         plant.put_setpoint(value)
+        await _count_alicat_put(group, 'Setpoint', value)
         return plant.a['sp_val']  # VAL always becomes sp_val, even on hold
     return _put
 
 
-def mk_put_ramp(plant):
+def mk_put_ramp(plant, alicat=True):
+    """alicat=False for <W>SetRamp: the same ramp, set by the world, not a put to the Alicat."""
     async def _put(group, instance, value):
         value = _finite(value)
         if value < 0:
             raise ValueError(f'ramp rate must be >= 0 SLPM/s (0 = unlimited), got {value!r}')
         plant.put_ramp(value)
+        if alicat:
+            await _count_alicat_put(group, 'RampRate', value)
         return value
     return _put
 
@@ -159,6 +173,7 @@ def mk_put_ramp(plant):
 def mk_put_run(plant):
     async def _put(group, instance, value):
         plant.put_run()
+        await _count_alicat_put(group, 'Run', value)
         return value
     return _put
 
@@ -256,18 +271,23 @@ def mk_put_noise(plant):
 # see server.py PVSpec.get_instantiation_info: full_pvname = group.prefix + name).
 
 def build_plant_group(idx, a_prefix, o2_name, w_prefix, plant, noise_on, run_loop=None):
+    # Initial values come from the plant's own state: 0 for a fresh plant (as before), the
+    # preset's values after --preset, so a client connecting before the first 1 Hz publish never
+    # sees a stopped Alicat that is in fact flowing.
+    r = plant.rbv
     attrs = {
+        'alicat_puts': 0,       # puts to Setpoint / RampRate / Run so far (<W>AlicatPuts)
         # ---- Alicat MFC (spec Sec 6.1 / Alicat_BC.db names)
         'Setpoint': pvproperty(
-            value=0.0, dtype=float, precision=3, units='SLPM',
+            value=float(plant.a['sp_val']), dtype=float, precision=3, units='SLPM',
             name=a_prefix + 'Setpoint', alarm_group=a_prefix + 'Setpoint', put=mk_put_setpoint(plant)),
         'Setpoint_RBV': pvproperty(
-            value=0.0, dtype=float, read_only=True, name=a_prefix + 'Setpoint_RBV'),
+            value=float(r['sp']), dtype=float, read_only=True, name=a_prefix + 'Setpoint_RBV'),
         'Flow_RBV': pvproperty(
-            value=0.0, dtype=float, precision=2, units='SLPM', read_only=True,
+            value=float(r['flow']), dtype=float, precision=2, units='SLPM', read_only=True,
             name=a_prefix + 'Flow_RBV'),
         'Total_RBV': pvproperty(
-            value=0.0, dtype=float, read_only=True, name=a_prefix + 'Total_RBV'),
+            value=float(r['total']), dtype=float, read_only=True, name=a_prefix + 'Total_RBV'),
         'Running_RBV': pvproperty(
             value=1, dtype=ChannelType.ENUM, enum_strings=RUNNING_STATES, read_only=True,
             name=a_prefix + 'Running_RBV'),
@@ -327,7 +347,7 @@ def build_plant_group(idx, a_prefix, o2_name, w_prefix, plant, noise_on, run_loo
             name=w_prefix + 'Hold', alarm_group=w_prefix + 'Hold', put=mk_put_hold(plant)),
         'SetRamp': pvproperty(
             value=float(plant.a['ramp']), dtype=float,
-            name=w_prefix + 'SetRamp', alarm_group=w_prefix + 'SetRamp', put=mk_put_ramp(plant)),
+            name=w_prefix + 'SetRamp', alarm_group=w_prefix + 'SetRamp', put=mk_put_ramp(plant, alicat=False)),
         'Gas': pvproperty(
             value=GAS_STATES.index(plant.a['gas']), dtype=ChannelType.ENUM,
             enum_strings=GAS_STATES, name=w_prefix + 'Gas', alarm_group=w_prefix + 'Gas', put=mk_put_gas(plant)),
@@ -346,6 +366,9 @@ def build_plant_group(idx, a_prefix, o2_name, w_prefix, plant, noise_on, run_loo
             name=w_prefix + 'Noise', alarm_group=w_prefix + 'Noise', put=mk_put_noise(plant)),
         'Bulk': pvproperty(
             value=float(plant.C), dtype=float, read_only=True, name=w_prefix + 'Bulk'),
+        'AlicatPuts': pvproperty(
+            value=0, dtype=int, read_only=True, name=w_prefix + 'AlicatPuts',
+            alarm_group=w_prefix + 'AlicatPuts'),
         'Time': pvproperty(
             value=0.0, dtype=float, read_only=True, name=w_prefix + 'Time', startup=run_loop),
     }
@@ -574,6 +597,10 @@ def build_arg_parser():
                     help='publish (sample_analyzer/poll_alicat/PV writes) at whole wall-clock '
                          'second + this many seconds, not on the second itself (default 0.75; '
                          'see README "Timing")')
+    p.add_argument('--preset', type=float, default=None, metavar='SLPM',
+                    help='start plant 0 already at steady state at this flow (as a put to '
+                         '<W>Preset, but before the server serves anything, so a client that '
+                         'connects first sees the preset values); must be > 0')
     return p
 
 
@@ -643,6 +670,13 @@ def main(argv=None):
     for idx, (a_prefix, o2_name, w_prefix) in enumerate(plant_specs):
         seed = None if args.seed is None else args.seed + idx
         plant = Plant(seed=seed, noise=not args.no_noise)
+        if idx == 0 and args.preset is not None:
+            if not (math.isfinite(args.preset) and args.preset > 0):
+                print(f'plant_sim.py: refusing to start: --preset must be > 0 SLPM, got {args.preset!r}',
+                      file=sys.stderr)
+                sys.exit(2)
+            plant.preset(args.preset)
+            print(f'plant_sim.py: plant 0 preset at {args.preset} SLPM', file=sys.stderr)
         run_loop = _run_loop if idx == 0 else None
         group = build_plant_group(idx, a_prefix, o2_name, w_prefix, plant,
                                    noise_on=not args.no_noise, run_loop=run_loop)

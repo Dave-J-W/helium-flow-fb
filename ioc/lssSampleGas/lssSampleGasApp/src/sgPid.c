@@ -50,7 +50,7 @@ int sg_pid_prepare(sg_ctl *c, sg_epid_cfg *cfg)
     e->CVAL = sum / c->nAvg;
     cfg->VAL = e->VAL; cfg->KP = e->KP; cfg->KI = e->KI; cfg->DRVL = e->DRVL;
     cfg->DRVH = e->DRVH; cfg->ODEL = e->ODEL; cfg->CVAL = e->CVAL;
-    cfg->OUTL = c->lastCmd; cfg->FBON = e->FBON;
+    cfg->OUTL = c->lastCmd; cfg->FBON = e->FBON; cfg->SEED = c->seedStart;
     return 1;
 }
 

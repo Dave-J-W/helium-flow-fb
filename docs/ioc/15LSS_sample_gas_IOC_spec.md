@@ -769,8 +769,8 @@ wrong, so this is on the banner, not only in the log (conformance audit 2026-09-
 3. **Input:** write `PID:CVAL` = mean(`avgBuf`).
    **Fully bumpless start** (user decision, 2026-09-29). Epid's own start sets I from OUTL but
    still adds P = KP·e, so the first step would move the flow by KP·e (+0.044 SLPM in the bench
-   restart test). So, when epid's FBON goes 0 → 1 (FBOP = 0: after a restart, HANDOFF → REGULATE,
-   or Resume Flow), before processing:
+   restart test). So, when epid's FBON goes 0 → 1 (FBOP = 0) after **the restart decision (§8.15)
+   or Resume Flow from IDLE** (the user asked for smooth restarts), before processing:
    - write `$(P)PID:Out` = clamp(`lastCmd` − KP·(VAL − CVAL), DRVL, DRVH), with the KP actually
      written (gain schedule and fine band included); epid's first output is then `lastCmd`;
    - write `ODEL` = 0 for this one processing, so the deadband cannot keep epid's stale OVAL
@@ -779,6 +779,13 @@ wrong, so this is on the banner, not only in the log (conformance audit 2026-09-
    Near a drive limit the clamp leaves a first step of the excess, in the direction P asks for.
    `lastCmd` unknown (NaN): leave `PID:Out` alone. The reference model keeps epid's plain start;
    this is a deliberate difference, which the replay does not see (it models epid itself).
+
+   **Not at HANDOFF → REGULATE.** There, write `$(P)PID:Out` = `lastCmd` and keep `ODEL`: epid's
+   own start, as the reference. After a purge the O2 is below target, so the seed
+   `lastCmd` − KP·e clamps at DRVL and starts the integral about 0.2 SLPM low. In the noise-free
+   comparison (Plan 4 Task 3, sc01), O2 then overshot to 1.029 % against the reference's 1.003 %
+   and raised a MINOR `O2 above target range` that the reference does not. Scoped 2026-09-29 by
+   the implementer, from the user's request "make restarts fully smooth"; the user can widen it.
 4. **Process** `$(P)PID` (put `PROC`) and wait for completion (put-callback). epid then applies its
    own algorithm:
    - error = VAL − CVAL

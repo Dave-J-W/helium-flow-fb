@@ -5,6 +5,25 @@ are in the Claude skills `cmc-epics-ioc` and `reference-trace-replay-port`; this
 about finishing THIS project. The spec (`docs/ioc/15LSS_sample_gas_IOC_spec.md`) is the
 authority; the user's decisions of 2026-09-28 are written into it.
 
+## 0. State on 2026-09-29, evening (read before the rest; the rest is older)
+
+- **Branches.** `ioc-fixes` (worktree `Documents\Claude Locals\o2-purge-fixes`) is now the most complete. It contains all of `ioc-plan2` plus:
+  - the conformance-audit fix round (`docs/ioc/CONFORMANCE.md` §2, with the user's decisions G1, G2 = MAJOR, G3 and D5);
+  - the setpoint-follow ramp allowance;
+  - the production paths in `configure/RELEASE` (committed by the user, `7fa7342`);
+  - the simplified sparse-clone `INSTALL.md`;
+  - `-std=gnu99` in the Makefile: the production host's gcc defaults to gnu89 and stopped on `sgFmt.c`.
+- **Not yet merged:** `ioc-plan2` has the uncommitted `ioc/test/test_compare.py` of the Plan 4 Task 3 agent (the noise-free comparison, still running at 17:40). When it reports, commit its work on `ioc-plan2`, then `git merge ioc-plan2` in the `ioc-fixes` worktree, and continue there.
+- **GitHub `main` = `d7f2145`:** a squash of `ioc-fixes` (it doesn't have test_compare.py). Publish only by the squash-and-scan procedure (step 10 below and the `github-access-dave-j-w` skill).
+- **Verified on `ioc-fixes`:** unit tests 45/45, glue 30/30, replay 19/19 exact (Windows and WSL Linux, gcc 11.4, the production module versions), the WSL smoke start, and the INSTALL steps as written in WSL.
+- **Still to do, in order:**
+  1. The merge above.
+  2. Rebuild on Windows (the running bench IOC is plan2's install; fixes has its own).
+  3. The bench regression listed in `.superpowers/sdd/conformance-fixes/report.md` ("Bench tests to run after the merge"): a second writer, G1 kill mid-purge, D2/D8 during the wait, the shadow alarm, a plant-sim dropout, test_tickage, test_pvnames, test_write_enable.
+  4. The full scenario suite on the final build (short set, then long set, about 13 h).
+  5. Tell the user before they go Live on the host.
+- **Host install:** the user is installing per `INSTALL.md`. Their `make` failed in C89 mode (fixed by `-std=gnu99`, pushed). We asked them which gcc `make` uses: it looks like gcc 4.x, not the reported 11.5.
+
 ## 1. Where things are
 
 | What | Where |

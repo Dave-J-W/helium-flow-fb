@@ -202,6 +202,11 @@ typedef struct sg_ctl {
     double followStep;     /* |lastCmd - the command before it| (SLPM): the Alicat ramps its
                               Setpoint_RBV over followStep / RampRate s after lastCmdTime */
     double nextFollowResend;
+    /* §8.11: 1 when REGULATE was entered by the restart decision or Resume Flow from IDLE (the
+       flow is the settled one: seed the start fully bumpless); 0 when entered through HANDOFF,
+       where the purge has driven O2 below target and the seed would clamp at DRVL and start the
+       integral low (Plan 4 Task 3, sc01: O2 overshoot to 1.03 %, a MINOR alarm) */
+    int seedStart;
 } sg_ctl;
 
 /* One PID step for the epid record, from sg_pid_prepare. The glue:
@@ -214,7 +219,10 @@ typedef struct sg_ctl {
         written as 0 for the start processing of step 1, so the output deadband cannot hold the
         record's stale OVAL (computed while FBON was 0) instead of OUTL,
      3. processes the record and passes its OVAL to sg_pid_done. */
-typedef struct { double VAL, KP, KI, DRVL, DRVH, ODEL, CVAL, OUTL; int FBON; } sg_epid_cfg;
+typedef struct { double VAL, KP, KI, DRVL, DRVH, ODEL, CVAL, OUTL; int FBON;
+                 int SEED;   /* 1: seed the start fully bumpless (step 1); 0: PID:Out = OUTL,
+                                epid's own start (after HANDOFF, as the reference) */
+               } sg_epid_cfg;
 
 /* Helium autosave image in the He: waveform layout (spec §7.7, §10): HistT/HistUsed/HistN,
    EvT/EvType/EvL/EvN, SnapT/SnapL/SnapN, plus CumL, LastTotal, CylBase (NaN = unset). All

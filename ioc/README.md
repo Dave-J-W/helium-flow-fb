@@ -50,6 +50,7 @@ and DLL.
 | PV names (spec §14.3a), bench IOC + two-plant simulator | `python -m unittest -v test_pvnames` in `ioc/test` | OK, about 11 min |
 | Write enable, shadow mode and Resume Flow (spec §14.3b, §14.5 shadow check), bench IOC + simulator | `python -m unittest -v test_write_enable` in `ioc/test` | OK, about 4 min |
 | Scenario acceptance, real time, bench IOC + simulator | `$env:SG_SCENARIOS='2,3,8'; python -m unittest test_scenarios` in `ioc/test` | PASS; results in `ioc/test/results/` |
+| Comparison with the reference, noise off (spec §14.2: transition times ±3 s, flows ±0.02 SLPM, lid ratio ±0.05), scenarios 1, 2, 3, 8, bench IOC + simulator | `$env:SG_COMPARE='2,3,8'; python -m unittest -v test_compare` in `ioc/test` (default all four; needs `golden/nonoise/`, made by `node test/ref/make_traces.js --no-noise`, or by the test itself) | OK; tables in `ioc/test/results/compare-sc*.txt`; about 1 h 55 min for all four |
 
 Python is the bench venv (`%USERPROFILE%\.venvs\bluesky\Scripts\python.exe`) with
 `PYTHONIOENCODING=utf-8`. The full scenario suite takes about 14 h; the short set (2, 3, 8, 9,

@@ -30,7 +30,8 @@ BENCH_ENV = {
     # exit-code / log-readiness checks (no actual get/put from this process, e.g.
     # TestBeaconConfinement's 5070 or TestStaleInstanceDetection's 5075) do not need to be
     # listed.
-    'EPICS_CA_ADDR_LIST': '127.0.0.1:5064 127.0.0.1:5066 127.0.0.1:5073 127.0.0.1:5076',
+    # 5074: TestPresetAndPutCounter (own PV names, so it can run next to a bench plant)
+    'EPICS_CA_ADDR_LIST': '127.0.0.1:5064 127.0.0.1:5066 127.0.0.1:5073 127.0.0.1:5074 127.0.0.1:5076',
     'EPICS_CA_AUTO_ADDR_LIST': 'NO',
     'EPICS_CAS_INTF_ADDR_LIST': '127.0.0.1',
     'EPICS_CAS_BEACON_ADDR_LIST': '127.0.0.1',
@@ -411,6 +412,73 @@ class TestRefusals(unittest.TestCase):
         ])
         self.assertEqual(result.returncode, 2, result.stderr)
         self.assertIn('SIM:O2', result.stderr)
+
+    def test_refuses_preset_not_positive(self):
+        for bad in ('0', '-1', 'nan'):
+            result = self._run(extra_args=['--preset', bad])
+            self.assertEqual(result.returncode, 2, (bad, result.stderr))
+            self.assertIn('--preset', result.stderr)
+
+
+# ---------------------------------------------------------------------------------------------
+# --preset (a plant already regulating from its first served value) and <W>AlicatPuts (every put
+# to the Alicat's writable PVs counted), for the bench tests that start the IOC before the plant
+# (test_fixes.py). Own PV names: can run while a bench plant serves the SIM:Alicat1: set.
+
+class TestPresetAndPutCounter(unittest.TestCase):
+
+    PORT = 5074
+    A, O2, W = 'SIM:PsA:', 'SIM:PsO2', 'SIM:PsW:'
+    FLOW = 0.29
+
+    @classmethod
+    def setUpClass(cls):
+        env = os.environ.copy()
+        cls.stdout_f, cls.stderr_f = _open_log_files()
+        cls.proc = subprocess.Popen(
+            [sys.executable, PLANT_SIM, '--no-noise', '--port', str(cls.PORT), '--preset', str(cls.FLOW),
+             '--plant', f'{cls.A},{cls.O2},{cls.W}'],
+            cwd=HERE, env=env, stdout=cls.stdout_f, stderr=cls.stderr_f, text=True,
+        )
+        cls.addClassCleanup(_terminate_and_close, cls.proc, cls.stdout_f, cls.stderr_f)
+        # the first values a client gets, taken as early as possible after the server is up
+        t_end = time.time() + 15
+        cls.first = None
+        while time.time() < t_end and cls.first is None:
+            sp = epics.caget(cls.A + 'Setpoint_RBV', timeout=0.5, use_monitor=False)
+            if sp is not None:
+                cls.first = {'sp': sp,
+                             'val': epics.caget(cls.A + 'Setpoint', use_monitor=False),
+                             'flow': epics.caget(cls.A + 'Flow_RBV', use_monitor=False),
+                             'o2': epics.caget(cls.O2, use_monitor=False),
+                             'puts': epics.caget(cls.W + 'AlicatPuts', use_monitor=False)}
+        if cls.first is None:
+            raise RuntimeError('preset server did not come up: '
+                               f'stderr={_read_log(cls.stderr_f)!r}')
+
+    def test_1_first_values_are_the_preset(self):
+        from plantsim.plant import Plant
+        f = self.first
+        self.assertAlmostEqual(f['sp'], self.FLOW, places=6)
+        self.assertAlmostEqual(f['val'], self.FLOW, places=6)
+        self.assertAlmostEqual(f['flow'], self.FLOW, places=2)
+        o2 = Plant(noise=False).steady_at(self.FLOW)
+        self.assertLess(abs(f['o2'] - o2) / o2, 0.05, f'O2 {f["o2"]} vs steady_at {o2}')
+        self.assertEqual(f['puts'], 0)
+        self.assertIn('preset at 0.29 SLPM', _read_log(self.stderr_f))
+
+    def test_2_alicat_puts_counted_world_ramp_not(self):
+        n0 = epics.caget(self.W + 'AlicatPuts', use_monitor=False)
+        for pv, v in (('Setpoint', 0.31), ('RampRate', 3), ('Run', 1)):
+            self.assertEqual(epics.caput(self.A + pv, v, wait=True, timeout=5), 1)
+        self.assertEqual(epics.caget(self.W + 'AlicatPuts', use_monitor=False), n0 + 3)
+        self.assertEqual(epics.caput(self.W + 'SetRamp', 3, wait=True, timeout=5), 1)
+        self.assertEqual(epics.caput(self.W + 'Preset', 0.29, wait=True, timeout=5), 1)
+        self.assertEqual(epics.caget(self.W + 'AlicatPuts', use_monitor=False), n0 + 3,
+                         'a World: put counted as a put to the Alicat')
+        log = _read_log(self.stderr_f)
+        self.assertIn('put Setpoint = 0.31', log)
+        self.assertIn('put Run = 1', log)
 
 
 # ---------------------------------------------------------------------------------------------

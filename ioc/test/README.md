@@ -45,6 +45,9 @@ Default config serves one plant at `SIM:Alicat1:` / `SIM:O2` / `SIM:World:`. Add
 second plant at `SIM:Alicat2:` / `SIM:O2b` / `SIM:World2:`, or `--plant
 ALICAT_PREFIX,O2_PV,WORLD_PREFIX` (repeatable) for custom names. `--seed N` seeds the RNG,
 `--no-noise` zeroes the noise and wander terms, `--port` overrides the default port (5066).
+`--preset <SLPM>` starts plant 0 already at steady state at that flow (the same as a put to
+`<W>Preset`, but before anything is served, so a client that connects first -- an IOC started
+before the plant -- sees the preset values, never a stopped Alicat); it must be > 0.
 
 `--phase <s>` (default `0.75`) shifts when the 1 Hz publish (`sample_analyzer`, `poll_alicat`,
 and the PV writes) happens: at whole wall-clock second + `phase`, not on the second itself. An
@@ -73,6 +76,10 @@ log helpers; it kills only the processes it started. `test_scenarios.py` runs th
 scenarios (`scenarios.py`) in real time; `SG_SCENARIOS=2,3,8` selects some. Results go to
 `results/sc<NN>-<timestamp>.json` (gitignored), IOC and plant console output next to them.
 The PC IOC (`run_ioc_pc.sh`, port 5064) may keep running meanwhile.
+`Bench(plant_first=False)` starts only the IOC (it then waits for the Alicat); `start_plant(preset=F)`
+starts the plant later, already regulating; `ioc_env={'FORCE_SHADOW': '1'}` reaches the bench
+`st.cmd`. `test_fixes.py` uses these for the conformance fix round's bench tests (D1b, G2, G1, D2,
+D8, the §8.18 dropout, the start-up heartbeat).
 
 ## Confinement gates (why it might refuse to start, exit code 2)
 
@@ -155,6 +162,7 @@ the second, not on the second itself -- see `--phase` above).
 | `<W>Seed` | int | put reseeds the RNG (test determinism, not physical) |
 | `<W>Noise` | enum `Off`/`On` | zeroes or restores the white-noise and slow-wander terms |
 | `<W>Bulk` | float, read-only | true bulk enclosure O2 concentration -- diagnostic only, not what the analyzer PV reports (test use only) |
+| `<W>AlicatPuts` | int, read-only | number of puts to `<A>Setpoint`, `<A>RampRate` and `<A>Run` since the server started (a `<W>SetRamp` put is not counted); each put is also logged to stderr. Lets a test prove "no put" whenever its own monitor connected (test use only) |
 | `<W>Time` | float, read-only | plant time in seconds since the server started |
 
 ### Gas_RBV / World:Gas placeholder

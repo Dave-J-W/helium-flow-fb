@@ -1,6 +1,8 @@
 # st.cmd: the BENCH start-up (spec §5.5): one station against the plant simulator (ioc/test/plant_sim.py).
 # Start it with ioc/tools/run_ioc.sh, which confines Channel Access to this PC first.
 # READONLY=1 in the environment starts it read-only (Plan 2 task 6); default writes possible.
+# FORCE_SHADOW=1 in the environment starts it in shadow mode (Par:writeEnable 0), as
+# st.cmd.production's SG_FORCE_SHADOW; used by ioc/test/test_fixes.py (D2).
 < envPaths
 epicsEnvSet("P", "SIM:SampleGas:")
 epicsEnvSet("SAVEDIR", "autosave")
@@ -15,4 +17,4 @@ iocInit
 
 create_monitor_set("sampleGas_settings.req", 30, "P=$(P)")
 create_monitor_set("sampleGas_helium.req", 300, "P=$(P)")
-seq sampleGas, "P=$(P),LOGDIR=logs,READONLY=$(READONLY=0)"
+seq sampleGas, "P=$(P),LOGDIR=logs,READONLY=$(READONLY=0),FORCE_SHADOW=$(FORCE_SHADOW=0)"
