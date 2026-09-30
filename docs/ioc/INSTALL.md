@@ -32,7 +32,7 @@ repo (about 15 MB), and everything else stays the same.
 ```bash
 cd /home/chem_epics/chemmatCARS/synApps/support/ChemMat/lssSampleGas/ioc/lssSampleGas
 make 2>&1 | tee build.log
-lssSampleGasApp/src/O.linux-x86_64/sgUnitTest | tail -1     # PASS: 45/45
+lssSampleGasApp/src/O.linux-x86_64/sgUnitTest | tail -1     # PASS: 46/46
 lssSampleGasApp/src/O.linux-x86_64/sgIocTest  | tail -1     # PASS: 30/30
 ```
 
