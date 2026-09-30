@@ -206,7 +206,7 @@ guides in `docs/simulator/` (user guide, illustrated tour, agent guide) are reco
 | Item | Value |
 |---|---|
 | IOC name (procServ, `start_ioc`) | `15LSS_sample_gas` |
-| Top directory | `lssSampleGas`, its own EPICS top (production: `support/ChemMat/lssSampleGas/`, decided by the user 2026-09-25; see §11) |
+| Top directory | `lssSampleGas`, its own EPICS top (production: `support/lssSampleGas/`, directly in the synApps support tree, decided by the user 2026-09-30, replacing `support/ChemMat/lssSampleGas/` of 2026-09-25; see §11) |
 | App directory | `lssSampleGasApp` |
 | IOC binary and dbd | `lssSampleGas`. It must start with a letter: EPICS uses it as a C identifier. |
 | iocBoot directory | `iocBoot/iocLSS_sample_gas` |
@@ -1324,7 +1324,8 @@ restart reset every source.
 - **synApps tree:** `$SUPPORT/`, the production synApps `support/` directory (ask the beamline staff for the path).
 - **Custom IOCs** live under `support/ChemMat/`, mostly in `iocBoot/iocX/` with a `startX`
   script (e.g. `iocSensors/startSensors`), some in nested tops of their own. This IOC is its
-  own top at `ChemMat/lssSampleGas/` (§5.1).
+  own top directly in the support tree, `support/lssSampleGas/` (§5.1; the user moved it out of
+  `ChemMat/` on 2026-09-30).
 
 ### 11.2 Versions
 
@@ -1356,7 +1357,7 @@ restart reset every source.
 ### 11.3 `start_ioc` entry to add
 
 ```
-15LSS_sample_gas   20125   1  $SUPPORT/ChemMat/lssSampleGas/iocBoot/iocLSS_sample_gas/startLSSSampleGas
+15LSS_sample_gas   20125   1  $SUPPORT/lssSampleGas/ioc/lssSampleGas/iocBoot/iocLSS_sample_gas/startLSSSampleGas
 ```
 
 How `start_ioc` works (from the script, supplied by the user 2026-09-25):
@@ -1367,8 +1368,8 @@ How `start_ioc` works (from the script, supplied by the user 2026-09-25):
   it; the implementer supplies the line.
 - **Port 20125** was the next free port when the table was read (the last entry used 20124).
   Re-check before adding.
-- **Nested paths under `ChemMat/` are already used** by other IOCs, so its own top at
-  `ChemMat/lssSampleGas/` fits the convention.
+- **Nested tops are already used** by other IOCs, so its own top at `support/lssSampleGas/`
+  (a sparse clone of the repo; the EPICS top is its `ioc/lssSampleGas/`) fits the convention.
 - **It runs** `procServ --noautorestart --logstamp -n "<NAME>_IOC" -L <log_folder><NAME>.log <PORT> <COMMAND>`,
   with the log folder set in the script (`$IOC_LOGS/` here).
 - **Consequences for the start script `startLSSSampleGas`:**
@@ -1635,7 +1636,7 @@ reviewed as mockups with the user on 2026-09-25.
 ## 15. Deployment and commissioning (with the user)
 
 1. **Production build** on the Linux host, after getting the module versions (§11.2). Install it
-   as its own top at `ChemMat/lssSampleGas/`. Add the `start_ioc` line (§11.3).
+   as its own top at `support/lssSampleGas/` (`docs/ioc/INSTALL.md`). Add the `start_ioc` line (§11.3).
 2. **Shadow mode** (`writeEnable` = 0). Run alongside the existing timer script and manual
    operation for at least one user run. Compare what the controller *would* have done:
    - purge handoffs
@@ -1661,7 +1662,7 @@ reviewed as mockups with the user on 2026-09-25.
 |---|---|---|---|
 | 15IDE station | user | 15IDE only | **Deferred.** Not in the first build. When added, its names are entered in its `Cfg:*` fields (§8.21); no code change. |
 | Production module versions | user | production build | **Known** (§11.2), including the ChemMat RELEASE pattern. |
-| Where the IOC sits under `ChemMat/` | user | production install | **Decided:** its own top at `ChemMat/lssSampleGas/`, so building it cannot touch the existing ChemMat IOCs. It starts through the existing `start_ioc` convention, recorded in §11.3. |
+| Where the IOC sits | user | production install | **Decided:** its own top at `support/lssSampleGas/` (2026-09-30; first `ChemMat/lssSampleGas/`), so building it cannot touch the existing ChemMat IOCs. It starts through the existing `start_ioc` convention, recorded in §11.3. |
 | Real usable litres per helium cylinder (`cylCapacityL`) | user | forecast accuracy | **Later, from data.** Keep the default 8000 L. The ledger measures it: `Total_RBV` used between two `NewCylinder` events, at a cylinder that ran empty (mismatch alarm). Shadow mode collects this without writing. |
 | Cylinder-pressure PV | user (future) | nothing (optional) | Enter in `Cfg:CYL` when it exists. |
 | Lifting the no-write rule on `15IDC:*` | user | §15.3 onwards | **Lifted for supervised writes on 2026-09-28** (§2.1 rule 1). The production IOC starts with `writeEnable` = 1 (§8.20, §9.1; user decision 2026-09-28); commissioning in shadow uses `startLSSSampleGasTest` (`FORCE_SHADOW`, its own autosave), and `Alm:Shadow` shows it (§8.20). |

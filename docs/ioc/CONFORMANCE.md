@@ -155,7 +155,7 @@ The core (`sgCore.c`, `sgChecks.c`, `sgPid.c`, `sgLedger.c`, `sgAlarms.c`) repla
 | 10 | `sampleGas_helium.req` contents; 300 s; `manual_save` after NewCylinder and MarkNewRun | `Db/sampleGas_helium.req`; `sgIoc.c:1127-1134, 1459-1464` | test_pvnames (MarkNewRun saves at once, checked in the .sav) | met |
 | 10 | Restore in pass 0; arrays restore completely (bench) | `iocBoot/save_restore.cmd:15-18` | test_pvnames (restart: HistUsed, CylBase) | met |
 | 10 | The same under production autosave R5-11 (manual_save, NELM 6000, Cfg strings in pass 0; §2.3) | `configure/RELEASE` | none | **untested** (U5) |
-| 11.1 | Own top at `ChemMat/lssSampleGas/` on the Linux host | `docs/ioc/INSTALL.md` | none (not installed) | **untested** (U6) |
+| 11.1 | Own top at `support/lssSampleGas/` on the Linux host (2026-09-30; was `ChemMat/lssSampleGas/`) | `docs/ioc/INSTALL.md` | built on the host, unit tests pass (user, 2026-09-30, at the old path) | **partly** (U6) |
 | 11.2 | `configure/RELEASE` names only the modules used, at production versions; site paths in an uncommitted RELEASE.local; example committed | `configure/RELEASE`; `ioc/lssSampleGas/.gitignore:12`; `RELEASE.local.production.example` | none | met (structural) |
 | 11.2 | Builds on gcc 11 / linux-x86_64 with the production modules; plain C17 | – | none (`ioc/tools/linux_build_check.sh` added at eeeb7d0; no result recorded) | **untested** (U5) |
 | 11.3 | `start_ioc` line, port 20125; `startLSSSampleGas` is `#!/bin/bash`, `cd "$(dirname "$0")"`, executable | `iocBoot/startLSSSampleGas` (git mode 100755); `docs/ioc/INSTALL.md:168-169` | none (never run on the host) | **untested** (U6) |

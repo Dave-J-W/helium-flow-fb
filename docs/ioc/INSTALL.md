@@ -1,8 +1,8 @@
 # Installing and testing 15LSS_sample_gas on the IOC host
 
 The IOC serves `15IDC:SampleGas:` and drives the Alicat `15IDC:Alicat1:` from the O2 reading
-`15IDC:D1Dmm_calc`. It installs into the ChemMat area of the synApps tree,
-`/home/chem_epics/chemmatCARS/synApps/support/ChemMat`.
+`15IDC:D1Dmm_calc`. It installs directly into the synApps support tree,
+`/home/chem_epics/chemmatCARS/synApps/support`.
 
 **Read this first.** A normal start (`start_ioc`) is *live*: if helium is already flowing (O2
 below 10 % and the Alicat setpoint above 0) it takes over the Alicat within seconds. So the first
@@ -14,7 +14,7 @@ you switch to live: two writers fight over the setpoint.
 Clone only the IOC and its screens from GitHub:
 
 ```bash
-cd /home/chem_epics/chemmatCARS/synApps/support/ChemMat
+cd /home/chem_epics/chemmatCARS/synApps/support
 git clone --sparse --filter=blob:none \
     https://github.com/Dave-J-W/helium-flow-fb.git lssSampleGas
 cd lssSampleGas
@@ -22,15 +22,15 @@ git sparse-checkout set ioc/lssSampleGas ioc/screens
 git log -1 --oneline                        # the version you install
 ```
 
-The IOC top is then `/home/chem_epics/chemmatCARS/synApps/support/ChemMat/lssSampleGas/ioc/lssSampleGas`, and the screens are in
-`/home/chem_epics/chemmatCARS/synApps/support/ChemMat/lssSampleGas/ioc/screens`. If git says `unknown option --sparse`, it is older than 2.27;
+The IOC top is then `/home/chem_epics/chemmatCARS/synApps/support/lssSampleGas/ioc/lssSampleGas`, and the screens are in
+`/home/chem_epics/chemmatCARS/synApps/support/lssSampleGas/ioc/screens`. If git says `unknown option --sparse`, it is older than 2.27;
 leave out `--sparse --filter=blob:none` and the `sparse-checkout` line. That clones the whole
 repo (about 15 MB), and everything else stays the same.
 
 ## 2. Build
 
 ```bash
-cd /home/chem_epics/chemmatCARS/synApps/support/ChemMat/lssSampleGas/ioc/lssSampleGas
+cd /home/chem_epics/chemmatCARS/synApps/support/lssSampleGas/ioc/lssSampleGas
 make 2>&1 | tee build.log
 lssSampleGasApp/src/O.linux-x86_64/sgUnitTest | tail -1     # PASS: 46/46
 lssSampleGasApp/src/O.linux-x86_64/sgIocTest  | tail -1     # PASS: 30/30
@@ -46,7 +46,7 @@ autosave R5-11). The same versions build without warnings on gcc 11 (checked on 
 Check that no `15LSS_sample_gas` is already running under procServ, then:
 
 ```bash
-cd /home/chem_epics/chemmatCARS/synApps/support/ChemMat/lssSampleGas/ioc/lssSampleGas
+cd /home/chem_epics/chemmatCARS/synApps/support/lssSampleGas/ioc/lssSampleGas
 cd iocBoot/iocLSS_sample_gas
 ./startLSSSampleGasTest
 ```
@@ -74,7 +74,7 @@ caget 15IDC:SampleGas:Sts:State 15IDC:SampleGas:Sts:TickAge
 
 ## 4. Screens
 
-The displays are in `/home/chem_epics/chemmatCARS/synApps/support/ChemMat/lssSampleGas/ioc/screens`. Open `sampleGas_simple.bob` (everyday) or
+The displays are in `/home/chem_epics/chemmatCARS/synApps/support/lssSampleGas/ioc/screens`. Open `sampleGas_simple.bob` (everyday) or
 `sampleGas_main.bob` (full panel) with the macro `P=15IDC:SampleGas:`, e.g. from an action button
 in one of your menu displays ("Open display", macros `P = 15IDC:SampleGas:`). The displays open
 each other and pass `P` on. `docs/ioc/OPERATOR_GUIDE.md` in the repo explains every field.
@@ -101,7 +101,7 @@ Have helium on and the enclosure closed. **Flow Zero** stops the helium at any p
    it only wraps because of the page width:
 
    ```
-   15LSS_sample_gas  20125  1  /home/chem_epics/chemmatCARS/synApps/support/ChemMat/lssSampleGas/ioc/lssSampleGas/iocBoot/iocLSS_sample_gas/startLSSSampleGas
+   15LSS_sample_gas  20125  1  /home/chem_epics/chemmatCARS/synApps/support/lssSampleGas/ioc/lssSampleGas/iocBoot/iocLSS_sample_gas/startLSSSampleGas
    ```
 2. Keep the old timer script off, and make sure the test IOC has exited.
 3. `start_ioc 15LSS_sample_gas`. It is live. With the Alicat at 0 it waits in IDLE for Purge or
@@ -115,13 +115,25 @@ its setpoint meanwhile and the restart resumes without a bump.
 ## 7. Updating
 
 ```bash
-cd /home/chem_epics/chemmatCARS/synApps/support/ChemMat/lssSampleGas
+cd /home/chem_epics/chemmatCARS/synApps/support/lssSampleGas
 git pull
 cd ioc/lssSampleGas && make 2>&1 | tee build.log
 ```
 
 Then restart the IOC (`start_ioc 15LSS_sample_gas`, or `exit` in its console). `git pull` keeps
 the IOC's settings (`autosave/`) and logs; they are not in the repo.
+
+If your install is still at the old location, `support/ChemMat/lssSampleGas`, stop the IOC
+(`exit` in its console), then move it and rebuild; the build writes absolute paths (`envPaths`)
+that still point at the old location:
+
+```bash
+cd /home/chem_epics/chemmatCARS/synApps/support
+mv ChemMat/lssSampleGas lssSampleGas
+cd lssSampleGas/ioc/lssSampleGas && make distclean && make 2>&1 | tee build.log
+```
+
+If a `start_ioc` line already names the old path, change it to the one in §6.
 
 ## Troubleshooting
 

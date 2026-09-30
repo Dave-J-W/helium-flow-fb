@@ -97,7 +97,7 @@ parameter change goes into spec §9.1 / §13 too. Rebuild to install the new dat
 
 Follow [docs/ioc/INSTALL.md](../docs/ioc/INSTALL.md). In short:
 1. A sparse clone of this repo (only `ioc/lssSampleGas` and `ioc/screens`) goes into
-   `/home/chem_epics/chemmatCARS/synApps/support/ChemMat/lssSampleGas`.
+   `/home/chem_epics/chemmatCARS/synApps/support/lssSampleGas`.
 2. Run `make` in its `ioc/lssSampleGas`. `configure/RELEASE` already has the host's paths.
 3. Make a shadow-mode first start in a terminal (`startLSSSampleGasTest`), then the test
    sequence.

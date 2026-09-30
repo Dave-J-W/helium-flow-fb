@@ -74,13 +74,13 @@ modules() {
 }
 
 ioc() {
-  local top="$PREFIX/ChemMat/lssSampleGas"
+  local top="$PREFIX/lssSampleGas"
   rm -rf "$top"
-  mkdir -p "$PREFIX/ChemMat"
+  mkdir -p "$PREFIX"
   # the package made per docs/ioc/INSTALL.md section 1B (git archive on the repo PC): a worktree's
   # .git points at a Windows path, which git in Linux can't follow
   [ -f "${PACKAGE:-}" ] || { echo "set PACKAGE=<lssSampleGas.tar.gz>" >&2; exit 2; }
-  tar -xzf "$PACKAGE" -C "$PREFIX/ChemMat"
+  tar -xzf "$PACKAGE" -C "$PREFIX"
   if grep -rlI $'\r' "$top" > /dev/null; then echo "package has CR line endings" >&2; exit 1; fi
   printf 'SUPPORT=%s\nEPICS_BASE=%s\n' "$SUP" "$PREFIX/base" > "$top/configure/RELEASE.local"
   echo "IOC: package $PACKAGE"
