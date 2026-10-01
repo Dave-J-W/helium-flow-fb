@@ -67,7 +67,7 @@ enum sg_event { SG_EV_PURGE = 1, SG_EV_ZERO = 2, SG_EV_CYLINDER = 3, SG_EV_NEWRU
 enum sg_lidres { SG_LID_PENDING, SG_LID_PASSED, SG_LID_SKIPPED, SG_LID_OPEN };
 
 #define SG_MSG      256
-#define SG_O2HIST   1024    /* >= max(90, stallWindow + slopeAvgN + 5) = 665 */
+#define SG_O2HIST   1024    /* >= max(90, stallWindow + slopeAvgN + 5, 2 lidWindow + 5) = 665 */
 #define SG_RATEHIST 512     /* >= lidSlopeWindow max 300 */
 #define SG_AVGBUF   128     /* >= avgN max 120 */
 #define SG_OVALHIST 1024    /* >= stallWindow + 1 = 601 */
@@ -82,7 +82,8 @@ typedef struct { char name[40]; double baseFlow, n, KP, KI, drvh, drvl; } sg_mod
 typedef struct {   /* spec §9.1, names = the Par:<key> suffixes; defaults in sg_default_params */
     double target, tol, delta, purgeFlow, purgeTimeoutMargin, cylWarnH, cylAlarmH, fbDelay,
            flowMinorX, flowMajorX, pinnedTime, o2AbnormalOffset, settleTimeout, V, lidOnsetFrac,
-           lidOnsetMax, lidWindow, lidCurvMin, openSlopeFrac, dropSkipLevel, cylCapacityL,
+           lidOnsetMax, lidWindow, lidCurvMin, lidMinSamples, openSlopeFrac, dropSkipLevel,
+           cylCapacityL,
            reportDays, runGap, handoffHold, purgeLag, handoffFlowTol, lidLevel, lidFilter,
            lidSlope, lidSlopeWindow, lidArmLevel, rampMaxPurge, rampMinHandoff, hardCeiling,
            purgeTimeoutMin, purgeTimeoutMax, ambientRef, flowLowX, mismatchAbs, mismatchFrac,

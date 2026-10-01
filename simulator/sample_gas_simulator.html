@@ -304,7 +304,7 @@ scenario**. Each scenario's description says what to watch for.
 |---|---|---|
 | IDLE | not touched | The controller is not managing the flow |
 | PRECHECK | not touched | Checks and fixes the Alicat before a purge: resumes it from hold, clamps a bad ramp rate, warns about the gas table |
-| PURGE | 20 SLPM | Purging; the lid check runs ~25 s after full flow |
+| PURGE | 20 SLPM | Purging; the lid check runs ~40 s after full flow |
 | HANDOFF | expected flow for the mode | Stepping down, then feedback on |
 | REGULATE | PID | Holding O2 at the target |
 | OPEN_LOOP | expected flow, fixed | The O2 reading was lost (invalid or frozen); no feedback possible |
@@ -317,11 +317,21 @@ scenario**. Each scenario's description says what to watch for.
 ### Purge
 
 - 20 SLPM.
-- **Lid check:** waits for the O2 decay to start (a 2 % drop). It then judges 15 s of decay.
+- **Lid check:** waits for the O2 decay to start (a 2 % drop). It then judges 30 s of decay
+  (15 s until 2026-09-30).
   - **Lid open** if the decay rate is below half the lid-on rate (flow ÷ volume), or if the decay
-    levels off (curvature below 0.8).
+    levels off (curvature below 0.8: the second half's rate over the first half's).
+  - The rates are least-squares fits over all the readings in the window. A reading equal to the
+    one before it means no new analyzer update reached the controller that second, and is left
+    out (user's decision 2026-09-30: such repeats had brought a closed-lid purge within 0.02 of
+    the curvature limit).
+  - Each half needs at least 4 updates (`lidMinSamples`) for the curvature test. With fewer, the
+    check waits, up to 60 s after the onset; then it judges on the rate alone and logs
+    "too few O2 updates for the curvature test … ratio only" (MINOR).
   - If no decay starts within 30 s, the lid is also open.
-  - The check is skipped if the purge starts below 18 % O2, which proves the lid was on.
+  - The check is skipped if the purge starts below 17 % O2, which proves the lid was on
+    (lowered from 18 %, user's decision 2026-09-30: lid-open handling dips to ~18.4 % are
+    common, below the archive's floor of 18.67 % for a steady open-lid reading).
 - **Handoff:** when the **lag-corrected** O2 has been below target − Δ for 5 s.
   - Δ = −0.04 %, i.e. hand off slightly *above* target.
   - The correction removes the analyzer's ~12 s lag at full flow, during which it reads ~10 %
@@ -429,9 +439,9 @@ scenario says otherwise. Your other settings are kept.
 | # | Scenario | What to watch |
 |---|---|---|
 | 1 | Normal purge from air, normal lid | Lid check passes; handoff; regulation |
-| 2 | Purge with the lid left open | OPEN_STOP at the lid check (~25 s) |
+| 2 | Purge with the lid left open | OPEN_STOP at the lid check (~40 s) |
 | 3 | Lid lifted during regulation | OPEN_STOP ~10 s after the lift |
-| 4 | Flow Zero, lid kept on 22 min, then Purge | No false trip; lid check skipped (O2 < 18 %) |
+| 4 | Flow Zero, lid kept on 22 min, then Purge | No false trip; lid check skipped (O2 < 17 %) |
 | 5 | Flow Zero, lift 76 s later, 2 min open, re-purge | The measured 24 Sep sequence |
 | 6 | Collimator lid fitted, mode A selected | Flow ≥ 2× expected once settled |
 | 7 | Cylinder runs dry during regulation | Flow mismatch; O2 creeps past 10 % without tripping OPEN_STOP |
@@ -843,9 +853,10 @@ function defaultControllerParams() {
     V: 41,                 // L, enclosure volume: sets the lid-on purge decay rate F/V
     lidOnsetFrac: 0.02,    // decay onset = first reading 2 % (relative) below the purge-start O2
     lidOnsetMax: 30,       // s after full flow; no onset by then = no decay = lid open
-    lidWindow: 15,         // s of decay after onset used to measure the rate
+    lidWindow: 30,         // s of decay after onset used to measure the rate (15 → 30 s: user, 2026-09-30, missed O2 updates)
     openSlopeFrac: 0.5,    // lid judged open if the measured decay rate < this fraction of F/V ...
     lidCurvMin: 0.8,       // ... or if the decay levels off: 2nd-half rate / 1st-half rate below this (lid on ≈ 1.0–1.1)
+    lidMinSamples: 4,      // O2 updates needed in each half of the window for the curvature test; fewer by 2 × lidWindow → ratio only
     cylCapacityL: 8000,    // usable litres of He in a full cylinder (forecast works from Alicat Total_RBV, no pressure PV needed)
     cylWarnH: 24, cylAlarmH: 6,   // h, forecast (median over windows) below these → MINOR / MAJOR
     reportDays: 60,        // helium-usage report window, ending at the end of the latest user run
@@ -1193,7 +1204,8 @@ class Controller {
     this.lastO2 = v;
     this.frozen = this.sameCount >= p.frozenTime;
     this.o2ok = an.sevr < 3 && v >= p.o2Min && v <= p.o2Max && !this.frozen;
-    this.o2hist.push(v); while (this.o2hist.length > Math.max(90, p.stallWindow + p.slopeAvgN + 5)) this.o2hist.shift();
+    // the lid check reads back up to 2 × lidWindow + 1 samples (doPurge)
+    this.o2hist.push(v); while (this.o2hist.length > Math.max(90, p.stallWindow + p.slopeAvgN + 5, 2 * p.lidWindow + 5)) this.o2hist.shift();
     const n = this.o2hist.length;
     const rate = n > 10 ? (v - this.o2hist[n - 11]) / 10 : 0;            // 10 s difference, %/s
     this.rateHist.push(this.o2ok ? rate : 0);
@@ -1337,6 +1349,29 @@ class Controller {
     this.blind = !this.o2ok;
     this.enter('PURGE', this.blind ? 'blind purge: O2 unavailable, timer only' : 'purge started');
   }
+  // Least-squares decay rate of ln(O2) against time, for the lid check. base = o2hist index of the onset
+  // sample, so sample i is t = i − base s after the onset; only ta ≤ t < tb counts. A sample equal to the
+  // one before it is a missed O2 update (real readings carry m%-level noise, so an exact repeat is not
+  // physical) and is left out; the first sample from the onset on is always kept.
+  // Returns { n: samples used, k: −slope in 1/s (0 if n < 2) }.
+  lidFit(base, ta, tb) {
+    const h = this.o2hist, i0 = Math.max(0, base);
+    let n = 0, sx = 0, sy = 0, sxy = 0, sxx = 0;
+    for (let i = i0; i < h.length; i++) {
+      const t = i - base;
+      if (t < ta || t >= tb || (i > i0 && h[i] === h[i - 1])) continue;
+      n++; sx += t; sy += Math.log(h[i]);
+    }
+    if (n < 2) return { n, k: 0 };
+    const mx = sx / n, my = sy / n;
+    for (let i = i0; i < h.length; i++) {
+      const t = i - base;
+      if (t < ta || t >= tb || (i > i0 && h[i] === h[i - 1])) continue;
+      const dx = t - mx;
+      sxy += dx * (Math.log(h[i]) - my); sxx += dx * dx;
+    }
+    return { n, k: -(sxy / sxx) };
+  }
   doPurge() {                                  // §4.2 / §4.3
     const p = this.p, sd = this.sd, r = this.rbv;
     if (sd.timerT0 == null && (r.flow >= 0.95 * p.purgeFlow || this.now - sd.t0 >= 30)) sd.timerT0 = this.now;
@@ -1359,19 +1394,27 @@ class Controller {
           sd.dropChecked = true; sd.kin = 0;
           this.stopOpen(`no O2 decay within ${p.lidOnsetMax} s of full flow: enclosure open?`); return;
         }
+        // Rates by least squares over the kept samples of the window and of its two halves (split at its
+        // midpoint in time), so a missed O2 update (a repeated value) cannot bias them. Too few updates in
+        // a half: keep waiting, up to 2 × lidWindow, then judge on the ratio alone (user, 2026-09-30).
         if (sd.onsetT != null && el >= sd.onsetT + p.lidWindow) {
-          sd.dropChecked = true;
           const kExp = p.purgeFlow / p.V / 60;                                            // 1/s, lid on
-          const span = el - sd.onsetT, half = Math.floor(span / 2), n = this.o2hist.length;
-          const cMid = this.o2hist[n - 1 - (span - half)];
-          const kObs = Math.log(sd.cOn / this.o2) / span;
-          const k1 = Math.log(sd.cOn / cMid) / half, k2 = Math.log(cMid / this.o2) / (span - half);
-          const ratio = kObs / kExp, curv = k1 > 0 ? k2 / k1 : 0;
-          sd.kin = ratio; sd.curv = curv; sd.kObs = kObs; sd.checkAt = el; sd.cCheck = this.o2;
-          if (ratio < p.openSlopeFrac || curv < p.lidCurvMin) {
-            this.stopOpen(`purge decay ${fmtN(100 * ratio, 0)} % of the lid-on rate, curvature ${fmtN(curv, 2)}: enclosure open?`); return;
+          const span = el - sd.onsetT, mid = span / 2;
+          const base = this.o2hist.length - 1 - span;                                     // o2hist index of the onset
+          const minN = Math.max(2, p.lidMinSamples);
+          const all = this.lidFit(base, 0, span + 1), h1 = this.lidFit(base, 0, mid), h2 = this.lidFit(base, mid, span + 1);
+          const full = h1.n >= minN && h2.n >= minN;
+          if (full || span >= 2 * p.lidWindow) {
+            const kObs = all.k, ratio = kObs / kExp;
+            const curv = !full ? NaN : h1.k > 0 ? h2.k / h1.k : 0;
+            if (!full) this.st.log(1, `lid check: too few O2 updates for the curvature test (${h1.n}/${h2.n}): ratio only`);
+            sd.dropChecked = true;
+            sd.kin = ratio; sd.curv = curv; sd.kObs = kObs; sd.checkAt = el; sd.cCheck = this.o2;
+            if (ratio < p.openSlopeFrac || (full && curv < p.lidCurvMin)) {
+              this.stopOpen(`purge decay ${fmtN(100 * ratio, 0)} % of the lid-on rate, curvature ${fmtN(curv, 2)}: enclosure open?`); return;
+            }
+            this.st.log(0, `lid check passed at ${el} s: decay ${fmtN(100 * ratio, 0)} % of the lid-on rate (open < ${fmtN(100 * p.openSlopeFrac, 0)} %), curvature ${fmtN(curv, 2)} (open < ${p.lidCurvMin}), ${all.n} O2 updates`);
           }
-          this.st.log(0, `lid check passed at ${el} s: decay ${fmtN(100 * ratio, 0)} % of the lid-on rate (open < ${fmtN(100 * p.openSlopeFrac, 0)} %), curvature ${fmtN(curv, 2)} (open < ${p.lidCurvMin})`);
         }
       }
     }
@@ -1608,7 +1651,7 @@ const SCENARIOS = [
     desc: 'Lid closed, box full of air. Purge at t = 5 s.\nWatch: lid check passes (decay ≈ 100 % of the lid-on rate). Handoff when the lag-corrected O2 < target − Δ for 5 s; the purge timeout scales with the target (≈ 1.3 × the kinetic purge time). Feedback turns on as soon as the flow has settled at the expected value, then regulation at 0.99 %. Mode A settles slowly (τ ≈ 169 min); try 1000×.',
     events: [act(5, 'operator presses Purge', s => s.ctl.opPurge())] },
   { name: '2. Purge with the lid left open',
-    desc: 'Lid open; Purge at t = 5 s.\nExpect: OPEN_STOP at the lid check, ~25 s after full flow (zero flow). After the decay onset (2 % drop), 15 s of decay are compared with the lid-on rate F/V: open if below half, or if the decay levels off (curvature < 0.8).\nCaveat: the open-box response to 20 SLPM has never been measured. The "openMix" plant parameter sets it; lower it (e.g. 0.02) to see where an open box would start passing the check.',
+    desc: 'Lid open; Purge at t = 5 s.\nExpect: OPEN_STOP at the lid check, ~40 s after full flow (zero flow). After the decay onset (2 % drop), 30 s of decay are compared with the lid-on rate F/V (least-squares rates; repeated readings, i.e. missed analyzer updates, are left out): open if below half, or if the decay levels off (curvature < 0.8).\nCaveat: the open-box response to 20 SLPM has never been measured. The "openMix" plant parameter sets it; lower it (e.g. 0.02) to see where an open box would start passing the check.',
     setup: s => s.plant.liftLid(),
     events: [act(5, 'operator presses Purge (lid is open)', s => s.ctl.opPurge())] },
   { name: '3. Lid lifted during regulation (Flow Zero forgotten)',
@@ -1825,6 +1868,7 @@ const DEEP_FIELDS = [
   F('lidOnsetMax', 'Lid check: no onset within this = open', 's', 10, 180, 5, true),
   F('lidWindow', 'Lid check: decay measured over', 's', 4, 60, 1, true),
   F('lidCurvMin', 'Lid check: open if decay levels off (2nd/1st-half rate) below', '', 0.1, 1, 0.05),
+  F('lidMinSamples', 'Lid check: O2 updates needed per half for the curvature test', '', 2, 30, 1, true),
   F('cylCapacityL', 'Usable He in a full cylinder (run-out forecast)', 'L', 100, 50000, 100),
   F('reportDays', 'Helium usage report window', 'days', 1, 365, 1, true),
   F('runGap', 'User run closes after no purge for (Admin can also mark a new run)', 's', 3600, 30 * 86400, 3600, true),

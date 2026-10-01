@@ -432,10 +432,10 @@ class TestDeepAdmin(unittest.TestCase):
             with self.subTest(group=g.findtext("name")):
                 self.assertLessEqual(right + 10, width - 12)
 
-    def test_49_d_level_fields(self):
+    def test_50_d_level_fields(self):
         n = sum(1 for k, pv, w in refs("deep") if k == "widget" and pv.startswith("Par:")
                 and w.get("type") == "textentry")
-        self.assertEqual(n, 49)
+        self.assertEqual(n, 50)   # 49 until lidMinSamples (2026-09-30)
 
     def test_linked_pv_rows(self):
         pvs = all_pvs("deep")

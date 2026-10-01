@@ -3,7 +3,7 @@
 <display version="2.0.0">
   <name>Sample gas: Deep admin</name>
   <width>960</width>
-  <height>1076</height>
+  <height>1100</height>
   <background_color>
     <color red="244" green="244" blue="244" />
   </background_color>
@@ -879,7 +879,7 @@
   </widget>
   <widget type="label" version="2.0.0">
     <name>hdr_groups</name>
-    <text>Thresholds, timing and limits (49 parameters in nine groups)</text>
+    <text>Thresholds, timing and limits (50 parameters in nine groups)</text>
     <x>10</x>
     <y>370</y>
     <width>940</width>
@@ -1241,7 +1241,7 @@
     <x>326</x>
     <y>394</y>
     <width>308</width>
-    <height>180</height>
+    <height>204</height>
     <style>0</style>
     <font>
       <font family="Liberation Sans" style="BOLD" size="12.0" />
@@ -1409,7 +1409,7 @@
       </foreground_color>
       <horizontal_alignment>0</horizontal_alignment>
       <vertical_alignment>1</vertical_alignment>
-      <tooltip>lidWindow: Decay measured over. Default 15, limits 4 to 60 s.</tooltip>
+      <tooltip>lidWindow: Decay measured over. Default 30, limits 4 to 60 s.</tooltip>
     </widget>
     <widget type="textentry" version="3.0.0">
       <name>par_lidWindow</name>
@@ -1422,7 +1422,7 @@
         <font family="Liberation Sans" style="REGULAR" size="11.0" />
       </font>
       <show_units>false</show_units>
-      <tooltip>lidWindow: Decay measured over. Default 15, limits 4 to 60 s.</tooltip>
+      <tooltip>lidWindow: Decay measured over. Default 30, limits 4 to 60 s.</tooltip>
     </widget>
     <widget type="label" version="2.0.0">
       <name>unit_lidWindow</name>
@@ -1532,11 +1532,57 @@
       <horizontal_alignment>0</horizontal_alignment>
       <vertical_alignment>1</vertical_alignment>
     </widget>
+    <widget type="label" version="2.0.0">
+      <name>lbl_lidMinSamples</name>
+      <text>Lid Min Samples</text>
+      <x>4</x>
+      <y>144</y>
+      <width>136</width>
+      <height>22</height>
+      <font>
+        <font family="Liberation Sans" style="REGULAR" size="11.0" />
+      </font>
+      <foreground_color>
+        <color red="85" green="85" blue="85" />
+      </foreground_color>
+      <horizontal_alignment>0</horizontal_alignment>
+      <vertical_alignment>1</vertical_alignment>
+      <tooltip>lidMinSamples: O2 updates per half for curvature test. Default 4, limits 2 to 30 samples.</tooltip>
+    </widget>
+    <widget type="textentry" version="3.0.0">
+      <name>par_lidMinSamples</name>
+      <pv_name>$(P)Par:lidMinSamples</pv_name>
+      <x>142</x>
+      <y>144</y>
+      <width>78</width>
+      <height>22</height>
+      <font>
+        <font family="Liberation Sans" style="REGULAR" size="11.0" />
+      </font>
+      <show_units>false</show_units>
+      <tooltip>lidMinSamples: O2 updates per half for curvature test. Default 4, limits 2 to 30 samples.</tooltip>
+    </widget>
+    <widget type="label" version="2.0.0">
+      <name>unit_lidMinSamples</name>
+      <text>samples</text>
+      <x>224</x>
+      <y>144</y>
+      <width>54</width>
+      <height>22</height>
+      <font>
+        <font family="Liberation Sans" style="REGULAR" size="11.0" />
+      </font>
+      <foreground_color>
+        <color red="136" green="136" blue="136" />
+      </foreground_color>
+      <horizontal_alignment>0</horizontal_alignment>
+      <vertical_alignment>1</vertical_alignment>
+    </widget>
   </widget>
   <widget type="group" version="3.0.0">
     <name>Lid detector (lid lifted)</name>
     <x>326</x>
-    <y>580</y>
+    <y>604</y>
     <width>308</width>
     <height>156</height>
     <style>0</style>
@@ -2176,7 +2222,7 @@
   <widget type="group" version="3.0.0">
     <name>Settling</name>
     <x>10</x>
-    <y>746</y>
+    <y>770</y>
     <width>308</width>
     <height>204</height>
     <style>0</style>
@@ -2519,7 +2565,7 @@
   <widget type="group" version="3.0.0">
     <name>Alarms</name>
     <x>326</x>
-    <y>746</y>
+    <y>770</y>
     <width>308</width>
     <height>180</height>
     <style>0</style>
@@ -2816,7 +2862,7 @@
   <widget type="group" version="3.0.0">
     <name>O2 reading checks</name>
     <x>326</x>
-    <y>932</y>
+    <y>956</y>
     <width>308</width>
     <height>108</height>
     <style>0</style>
@@ -2975,7 +3021,7 @@
   <widget type="group" version="3.0.0">
     <name>MFC hold monitor</name>
     <x>642</x>
-    <y>746</y>
+    <y>770</y>
     <width>308</width>
     <height>132</height>
     <style>0</style>
@@ -3180,7 +3226,7 @@
   <widget type="group" version="3.0.0">
     <name>Helium</name>
     <x>642</x>
-    <y>884</y>
+    <y>908</y>
     <width>308</width>
     <height>108</height>
     <style>0</style>
@@ -3340,7 +3386,7 @@
     <name>groups_note</name>
     <text>Each field: short label, entry box, unit (from ioc/tools/sg_pvs.py). Hover a field for its key, meaning, default and limits.</text>
     <x>10</x>
-    <y>1050</y>
+    <y>1074</y>
     <width>940</width>
     <height>18</height>
     <font>

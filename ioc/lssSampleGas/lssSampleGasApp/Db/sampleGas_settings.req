@@ -19,6 +19,7 @@ $(P)Par:lidOnsetFrac
 $(P)Par:lidOnsetMax
 $(P)Par:lidWindow
 $(P)Par:lidCurvMin
+$(P)Par:lidMinSamples
 $(P)Par:openSlopeFrac
 $(P)Par:dropSkipLevel
 $(P)Par:cylCapacityL

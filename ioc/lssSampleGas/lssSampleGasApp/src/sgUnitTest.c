@@ -564,6 +564,212 @@ static int t_drop_skip_level(void)
     return 0;
 }
 
+/* ================================================================ lid check: robust slopes
+   User's decision 2026-09-30 (spec §8.9 step 5.3): the decay rates are least-squares slopes of
+   ln(O2) over the window's kept samples (a repeated value = a missed O2 update, dropped), the
+   window is 30 s, and a half with fewer than lidMinSamples updates waits up to 2 lidWindow, then
+   the check judges on the ratio alone. The purges below start at 20.9 % with full flow from t = 3
+   (the purge timer's start), and the fresh reading at tick t is
+       20.9 × (a + (1 − a) exp(−r kExp (t − 3)))     (a = 0: a pure exponential at r × F/V)
+   times (1 + noise × pnoise(t)). held(t) = 1 makes tick t repeat the previous reading. */
+static const double KEXP = 20.0 / 41 / 60;           /* F/V at the defaults, 1/s */
+
+static double pnoise(long t)                         /* deterministic, zero mean, in [-1, 1] */
+{
+    unsigned int x = (unsigned int)t * 2654435761u;
+    x ^= x >> 13; x *= 0x5bd1e995u; x ^= x >> 15;
+    return (double)(x & 0xffffu) / 32767.5 - 1.0;
+}
+typedef int (*heldFn)(long t);
+static int heldNone(long t) { (void)t; return 0; }
+/* 20 %: every 5th tick, plus the first tick after the onset (7), the window's midpoint (21) and
+   both of its last ticks (35, 36): the onset is at t = 6 and the check at t = 36 */
+static int held20(long t) { return t % 5 == 0 || t == 7 || t == 21 || t == 35 || t == 36; }
+/* 50 %: every odd tick, plus the check tick 36 (so 35 and 36 both repeat 34) */
+static int held50(long t) { return t % 2 == 1 || t == 36; }
+/* a 10 s O2 PV: a fresh value at t = 6, 16, 26, ... only */
+static int held10s(long t) { return t % 10 != 6; }
+/* the analyzer misses every update for 20 s after the onset (t = 7..26), then 1 Hz again */
+static int heldStall(long t) { return t >= 7 && t <= 26; }
+
+/* Run the purge until the lid check decides (or the state leaves PURGE) or t = tMax. Returns the
+   tick of the decision, -1 if none. */
+static long lidRun(double a, double r, double noise, heldFn held, long tMax)
+{
+    sg_inputs in = base(20.9);
+    double prev = 20.9;
+    long t;
+    newCtl();
+    in.flow = 20; in.sp = 20;
+    tickAt(&in, 1);
+    sg_op_purge(&C);
+    tickAt(&in, 2);
+    for (t = 3; t <= tMax; t++) {
+        double v = 20.9 * (a + (1 - a) * exp(-r * KEXP * (double)(t - 3))) * (1 + noise * pnoise(t));
+        if (held(t)) v = prev;
+        prev = v;
+        in.o2 = v;
+        tickAt(&in, (double)t);
+        if (C.sd.dropChecked || C.state != SG_PURGE) return t;
+    }
+    return -1;
+}
+
+/* L1: an exact lid-on exponential gives ratio = curvature = 1 (to 1e-9), with or without
+   repeated samples (20 % and 50 %, including the sample after the onset, the midpoint and the
+   last samples of the window): the repeats are dropped, so nothing changes. The old three-point
+   check read the repeated end sample as O2 that stopped falling. */
+static int t_lid_exact_repeats(void)
+{
+    const char *T = "L1 lid check: exact decay, repeated samples";
+    static const struct { heldFn held; const char *name; } cases[] = {
+        { heldNone, "no repeats" }, { held20, "20 % repeats" }, { held50, "50 % repeats" },
+    };
+    size_t k;
+    for (k = 0; k < sizeof cases / sizeof cases[0]; k++) {
+        long td = lidRun(0, 1, 0, cases[k].held, 120);
+        CHECK(T, C.state == SG_PURGE && C.sd.lidResult == SG_LID_PASSED,
+              "%s: state %d lidResult %d", cases[k].name, C.state, C.sd.lidResult);
+        CHECK(T, fabs(C.sd.kin - 1) < 1e-9 && fabs(C.sd.curv - 1) < 1e-9,
+              "%s: ratio %.12f curvature %.12f (want 1, 1)", cases[k].name, C.sd.kin, C.sd.curv);
+        CHECK(T, fabs(C.sd.kObs - KEXP) < 1e-12, "%s: kObs %.15g", cases[k].name, C.sd.kObs);
+        CHECK(T, C.sd.onsetT == 3 && td == 36 && C.sd.checkAt == 33,
+              "%s: onset el %g, decided at t %ld (el %g); want onset 3, t 36 (lidWindow 30)",
+              cases[k].name, C.sd.onsetT, td, C.sd.checkAt);
+        CHECK(T, countLogSub("ratio only") == 0, "%s: ratio-only fallback at 1 Hz", cases[k].name);
+    }
+    CHECK(T, countLog(0, "lid check passed at 33 s: decay 100 % of the lid-on rate (open < 50 %), "
+                         "curvature 1.00 (open < 0.8), 15 O2 updates") == 1,
+          "passed line (50 %%: 31 samples, 16 repeats dropped)");
+    return 0;
+}
+
+/* L2: with reading noise (2e-4 relative, ~4 m% at 20 %) the 20 % repeats change the ratio and
+   the curvature by less than 0.01 (noise level; the old check moved them by ~0.07-0.13). */
+static int t_lid_noise_repeats(void)
+{
+    const char *T = "L2 lid check: noisy decay, repeated samples";
+    double r0, c0;
+    lidRun(0, 1, 2e-4, heldNone, 120);
+    CHECK(T, C.sd.lidResult == SG_LID_PASSED, "no repeats: lidResult %d", C.sd.lidResult);
+    r0 = C.sd.kin; c0 = C.sd.curv;
+    CHECK(T, fabs(r0 - 1) < 0.02 && fabs(c0 - 1) < 0.05, "no repeats: ratio %.4f curvature %.4f", r0, c0);
+    lidRun(0, 1, 2e-4, held20, 120);
+    CHECK(T, C.sd.lidResult == SG_LID_PASSED, "20 %%: lidResult %d", C.sd.lidResult);
+    CHECK(T, fabs(C.sd.kin - r0) < 0.01 && fabs(C.sd.curv - c0) < 0.01,
+          "20 %% repeats: ratio %.4f (vs %.4f) curvature %.4f (vs %.4f)", C.sd.kin, r0, C.sd.curv, c0);
+    return 0;
+}
+
+/* L3: a 10 s O2 PV on a closed lid. At onset + 30 s each half holds 2 updates (< 4): the check
+   waits; at onset + 60 s the first half still holds 3, so it judges on the ratio alone, logs
+   that (MINOR), and passes. The old check judged every such purge open (curvature 0). */
+static int t_lid_10s_updates(void)
+{
+    const char *T = "L3 lid check: 10 s O2 updates";
+    const char *RONLY = "lid check: too few O2 updates for the curvature test (3/4): ratio only";
+    long td = lidRun(0, 1, 0, held10s, 200);
+    CHECK(T, C.state == SG_PURGE && C.sd.lidResult == SG_LID_PASSED,
+          "closed lid judged open: state %d lidResult %d", C.state, C.sd.lidResult);
+    CHECK(T, fabs(C.sd.kin - 1) < 1e-9 && isnan(C.sd.curv), "ratio %.12f curvature %g", C.sd.kin, C.sd.curv);
+    CHECK(T, td == 66 && C.sd.checkAt == 63, "decided at t %ld (el %g); want 66 (onset 3 + 2 x 30)",
+          td, C.sd.checkAt);
+    CHECK(T, countLog(1, RONLY) == 1 && logTime(RONLY) == 66, "ratio-only line missing");
+    CHECK(T, countLog(0, "lid check passed at 63 s: decay 100 % of the lid-on rate (open < 50 %), "
+                         "curvature – (open < 0.8), 7 O2 updates") == 1, "passed line");
+    CHECK(T, countLogSub("enclosure open?") == 0 && C.alarms[SG_A_OPENSTOP].active == 0, "OpenStop");
+    return 0;
+}
+
+/* L4: open lid, slow decay (0.2 × F/V): caught on the ratio, at 1 Hz (full test, at onset + 30 s)
+   and with a 10 s O2 PV (ratio only, at onset + 60 s); the flow is stopped. */
+static int t_lid_open_slow(void)
+{
+    const char *T = "L4 lid check: open lid, slow decay";
+    const char *MSG = "purge decay 20 % of the lid-on rate, curvature 1.00: enclosure open?";
+    const char *MSG10 = "purge decay 20 % of the lid-on rate, curvature –: enclosure open?";
+    long td = lidRun(0, 0.2, 0, heldNone, 200);
+    CHECK(T, C.state == SG_OPEN_STOP, "1 Hz: state %d", C.state);
+    CHECK(T, countLog(2, MSG) == 1 && alarmIs(SG_A_OPENSTOP, 2, MSG) && lastPutSp == 0, "1 Hz: OpenStop / flow");
+    CHECK(T, td == 46, "1 Hz: caught at t %ld; want 46 (onset el 13 + 30)", td);
+    td = lidRun(0, 0.2, 0, held10s, 200);
+    CHECK(T, C.state == SG_OPEN_STOP, "10 s: state %d", C.state);
+    CHECK(T, countLog(2, MSG10) == 1 && alarmIs(SG_A_OPENSTOP, 2, MSG10) && lastPutSp == 0,
+          "10 s: OpenStop / flow");
+    CHECK(T, td == 76 && countLogSub("ratio only") == 1, "10 s: caught at t %ld; want 76 (onset 13 + 60)", td);
+    return 0;
+}
+
+/* L5: open lid whose decay levels off (a = 0.7, r = 6: ratio ~0.98, curvature ~0.53): caught on
+   the curvature, also with 20 % repeated samples. */
+static int t_lid_open_plateau(void)
+{
+    const char *T = "L5 lid check: open lid, decay levels off";
+    static const heldFn helds[] = { heldNone, held20 };
+    size_t k;
+    for (k = 0; k < 2; k++) {
+        lidRun(0.7, 6, 0, helds[k], 200);
+        CHECK(T, C.state == SG_OPEN_STOP, "%s: state %d", k ? "20 %" : "no repeats", C.state);
+        CHECK(T, strstr(C.alarms[SG_A_OPENSTOP].msg, "of the lid-on rate, curvature 0.5") != NULL,
+              "%s: not caught on the curvature: '%s'", k ? "20 %" : "no repeats", C.alarms[SG_A_OPENSTOP].msg);
+    }
+    return 0;
+}
+
+/* L6: too few updates in a half at onset + 30 s: the check waits, and decides as soon as both
+   halves hold lidMinSamples (here the analyzer misses 20 s after the onset; the first half
+   [0, span/2) reaches 4 updates at span 47: the onset sample and 21, 22, 23 s after it). */
+static int t_lid_wait(void)
+{
+    const char *T = "L6 lid check: wait for updates";
+    long td = lidRun(0, 1, 0, heldStall, 200);
+    CHECK(T, C.sd.lidResult == SG_LID_PASSED && fabs(C.sd.kin - 1) < 1e-9 && fabs(C.sd.curv - 1) < 1e-9,
+          "lidResult %d ratio %.12f curvature %.12f", C.sd.lidResult, C.sd.kin, C.sd.curv);
+    CHECK(T, td == 53 && C.sd.checkAt == 50, "decided at t %ld (el %g); want 53 (span 47)", td, C.sd.checkAt);
+    CHECK(T, countLogSub("ratio only") == 0, "fell back to ratio only");
+    return 0;
+}
+
+/* L7: the defaults and the O2 history length (2 lidWindow + 5 at the largest lidWindow). */
+static int t_lid_defaults(void)
+{
+    const char *T = "L7 lid check defaults";
+    sg_params p;
+    long t;
+    sg_default_params(&p);
+    CHECK(T, p.lidWindow == 30 && p.lidMinSamples == 4, "lidWindow %g lidMinSamples %g",
+          p.lidWindow, p.lidMinSamples);
+    /* lidWindow 60 with the shortest stall settings: the history must still hold 2 × 60 + 1 */
+    newCtl();
+    C.p.lidWindow = 60; C.p.stallWindow = 20; C.p.slopeAvgN = 1;
+    {
+        sg_inputs in = base(5);
+        for (t = 1; t <= 200; t++) tickO2(&in, 5, (double)t);
+    }
+    CHECK(T, C.nO2 == 125, "o2hist length %d (want 125)", C.nO2);
+    /* the same at lidWindow 60 through a purge with a 20 s O2 PV: ratio only at span 120, from
+       all 7 updates (with the old 90-sample history the onset sample would have been lost) */
+    {
+        sg_inputs in = base(20.9);
+        double prev = 20.9;
+        newCtl();
+        C.p.lidWindow = 60; C.p.stallWindow = 20; C.p.slopeAvgN = 1;
+        in.flow = 20; in.sp = 20;
+        tickAt(&in, 1); sg_op_purge(&C); tickAt(&in, 2);
+        for (t = 3; t <= 300 && !C.sd.dropChecked; t++) {
+            double v = 20.9 * exp(-KEXP * (double)(t - 3));
+            if (t % 20 != 6) v = prev;
+            prev = v; in.o2 = v; tickAt(&in, (double)t);
+        }
+        CHECK(T, C.sd.lidResult == SG_LID_PASSED && fabs(C.sd.kin - 1) < 1e-9 && C.sd.checkAt == 123,
+              "lidWindow 60, 20 s: lidResult %d ratio %.12f checkAt %g", C.sd.lidResult, C.sd.kin,
+              C.sd.checkAt);
+        CHECK(T, countLog(1, "lid check: too few O2 updates for the curvature test (3/4): ratio only") == 1 &&
+                 countLogSub("curvature – (open < 0.8), 7 O2 updates") == 1, "lidWindow 60, 20 s: log");
+    }
+    return 0;
+}
+
 /* R5 b: purge timeout → PurgeIncomplete latch, then HANDOFF. */
 static int t_purge_timeout(void)
 {
@@ -1630,7 +1836,9 @@ int main(void)
     static int (*const tests[])(void) = {
         t_resume_idle, t_resume_idle_high, t_resume_invalid, t_resume_purge, t_set_mode,
         t_mark_new_run, t_mfc_disconnect, t_mfc_blip, t_resume_mfc, t_forecast_text, t_progress_text,
-        t_no_decay, t_drop_skip_level, t_purge_timeout, t_blind_purge, t_handoff_invalid, t_precheck_hold, t_hold_resume_mismatch,
+        t_no_decay, t_drop_skip_level,
+        t_lid_exact_repeats, t_lid_noise_repeats, t_lid_10s_updates, t_lid_open_slow, t_lid_open_plateau,
+        t_lid_wait, t_lid_defaults, t_purge_timeout, t_blind_purge, t_handoff_invalid, t_precheck_hold, t_hold_resume_mismatch,
         t_reconnect_mismatch, t_mfc_frozen, t_gas,
         t_flow_high, t_flow_low, t_not_reached, t_pinned_low, t_cyl_low, t_total_backwards,
         t_total_nan, t_ledger_disconnected, t_new_cylinder_disconnected, t_o2_nan, t_restart_mfc, t_restart_lid,

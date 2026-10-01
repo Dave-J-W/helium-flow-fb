@@ -5,6 +5,51 @@ are in the Claude skills `cmc-epics-ioc` and `reference-trace-replay-port`; this
 about finishing THIS project. The spec (`docs/ioc/15LSS_sample_gas_IOC_spec.md`) is the
 authority; the user's decisions of 2026-09-28 are written into it.
 
+## 0b. State and findings, 2026-09-30 to 10-01 (supersedes 0a where they differ)
+
+**Install and first live run**
+- **Install location:** the user installed at `support/lssSampleGas` (no `ChemMat/`). `make` and the
+  unit tests passed on chemmat-C92.
+- **First live run:** on 30 Sep at 13:24:51 CDT the user started `startLSSSampleGas` by accident (not the Test start).
+  - **What happened:** O2 was 0.929 % and the flow about 0.24 SLPM. The restart rule went straight to REGULATE (designed), the bumpless seed held 0.24, and then four PID steps took it to about 0.19 SLPM in 3.4 min. The user exited at about 13:29 and set 0.24 by hand.
+  - **Replay:** feeding the archived O2 into the C core plus a port of the real `devEpidSoft.c` reproduces those commands to within 0.003-0.006 SLPM, so the live IOC did what its code says.
+  - **Simulated, had the IOC kept running:** the flow would have bottomed at 0.14-0.18 SLPM, O2 reached 0.99 % in about 1 h, peaked at 0.993 % with no real overshoot, and then held at about 0.26 SLPM. Today's need is 0.255-0.27 SLPM, so the user's 0.24 lets O2 drift to 1.05-1.10 %.
+- **Its autosave:** that run wrote `autosave/` on the host with every default of the time, including `dropSkipLevel` 18. The user should delete it before the next start.
+- **Log text:** "IOC started (autosaved settings restored)" is printed even when no `.sav` existed. To fix (wording only).
+
+**Archive data (read before trusting any export)**
+- **The PV:** "oxygen level rbv" in the archive IS `15IDC:D1Dmm_calc`.
+- **Raw sampling, from the archiver's own PV config:**
+  - O2 was about every 5 s from 2026-08-25T20:28Z to 2026-09-24T18:17:45Z, and about every 1.005 s since.
+  - Flow_RBV is about every 10 s throughout.
+- **Resampled exports:** the "1Hz 10d" exports were resampled by the archiver (mean_1, forward-filled). Their Flow_RBV is mostly filled values, and part of their repeated O2 values are resampling artefacts. Use the RAW files and `HANDOFF_archiver_pulls_2026-10-01.md` in `o2-purge-plan2\analysis\data\`, and the `pv-retrieval` skill.
+- **Sensor rate:** on 2026-10-01 the user raised the O2 IOC's update rate to 2 Hz.
+
+**Lid-open O2 (116 h of 1 Hz data)**
+- **Baseline:** median 19.29 %. Below 18.4 % for 0.46 % of the time (6 dips), below 18 % three times, below 17 % only once (42 s during a lift).
+- **Skip level:** `dropSkipLevel` is now 17 % (user's decision, pushed `46fb936`). No archived purge started between 7 and 18.6 %.
+- **Unexplained:** on 25 Sep from 13:43 to 14:14, O2 sat at 17.6 % with the flow off (lid ajar? asked).
+
+**Lid check (spec §8.9): the no-false-stop question**
+- **Coverage:** 48 purges at 20 SLPM in 10 days, all with the lid on; none judged open.
+- **Margins:** curvature, not ratio, is the binding test. The minimum curvature margin was +0.023 (30 Sep 12:51), against +0.49 for ratio.
+- **Missed-update sensitivity (old check, resampled data):** with missed updates added at random, false stops ran 0.9 / 1.7 / 3.1 % at 10 / 14 / 20 % missed. An O2 PV updating every 10 s would be judged open on every purge.
+- **User's decision (1 Oct):** least-squares slopes that skip repeated samples, and `lidWindow` 15 → 30 s. A new parameter `lidMinSamples` (4): with too few updates, the check falls back to ratio only.
+  - **Committed** on `ioc-fixes` (`3f228a8`, `99cb704`, `0523246` and later), but **not pushed**.
+  - **Validation in progress** against the raw O2: the real gaps, the real purges, and the missed-update Monte Carlo.
+  - **Golden traces:** they must be regenerated with a backup first (they are untracked). Do that, then push.
+- **Detection untested:** the record has no open-lid 20 SLPM purge, so open-lid detection on real data is untested; a supervised test is for the user.
+
+**Regulation findings (to decide later, not changed)**
+- **Keep the integral:** the current integral approaches the target from below well. Integrating only near the target leaves O2 stuck below target with no alarm. Switching the integral off while approaching doubles the time to target.
+- **Optional:** a floor at 0.5× the expected flow after a restart in the post-purge dip, and `fbDelay` 60 s at the handoff (removes a 10-20 s spike to about DRVH).
+- **Bumpless seed:** it is bumpless only for O2 between about 0.91 and 1.01 % (the integral term clamps). The fix would be to ramp the PID target from the current O2. Entering the fine band jumps the flow by about +0.05 SLPM (the user is not worried).
+- **Flow needed at 0.99 %, normal lid:** median 0.254 SLPM (0.20-0.37). Mode A's defaults fit.
+
+**In progress**
+- **O2 update diagnostic** (user's request): `Diag:O2Fresh10m/24h`, `MaxGap`, `Interval` and counts, on branch `ioc-o2diag` (worktree `o2-purge-o2diag`). Observation only, no alarms.
+- **Dropped-update robustness tests:** a plant-sim option that drops O2 updates and jitters them, then the scenario set rerun at about 15 % dropped, compared with the clean run. This audits every rule that reads O2 (user: build for missed updates on a 1 Hz schedule).
+
 ## 0a. State on 2026-09-30 (supersedes 0 where they differ)
 
 - **Everything in 0's "still to do" 1-4 is done:** merged; bench regression all green (new

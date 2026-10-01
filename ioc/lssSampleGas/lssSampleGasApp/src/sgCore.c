@@ -63,9 +63,10 @@ void sg_default_params(sg_params *p)
     p->V = 41;
     p->lidOnsetFrac = 0.02;
     p->lidOnsetMax = 30;
-    p->lidWindow = 15;
+    p->lidWindow = 30;          /* 15 -> 30 s: user's decision 2026-09-30 (spec §8.9) */
     p->openSlopeFrac = 0.5;
     p->lidCurvMin = 0.8;
+    p->lidMinSamples = 4;
     p->cylCapacityL = 8000;
     p->cylWarnH = 24; p->cylAlarmH = 6;
     p->reportDays = 60;
@@ -352,9 +353,9 @@ static void readInputs(sg_ctl *c)
     c->lastO2 = v;
     c->frozen = c->sameCount >= p->frozenTime;
     c->o2ok = sevr < 3 && v >= p->o2Min && v <= p->o2Max && !c->frozen;
-    if (!isnan(v))
+    if (!isnan(v))   /* the lid check reads back up to 2 lidWindow + 1 samples (doPurge) */
         sg_push_capped(c->o2hist, &c->nO2, SG_O2HIST, v,
-                       sg_jmax(90, p->stallWindow + p->slopeAvgN + 5));
+                       sg_jmax(sg_jmax(90, p->stallWindow + p->slopeAvgN + 5), 2 * p->lidWindow + 5));
     n = c->nO2;
     rate = n > 10 ? (v - c->o2hist[n - 11]) / 10 : 0;   /* 10 s difference, %/s */
     sg_push_capped(c->rateHist, &c->nRate, SG_RATEHIST, c->o2ok ? rate : 0, p->lidSlopeWindow);
@@ -453,11 +454,37 @@ static void doPrecheck(sg_ctl *c)
     sg_enter(c, SG_PURGE, c->blind ? "blind purge: O2 unavailable, timer only" : "purge started");
 }
 
-/* o2hist[i] as JS reads it: out of range is undefined, which becomes NaN in arithmetic. */
-static double o2histAt(const sg_ctl *c, double i)
+/* lidFit (reference Controller.lidFit), spec §8.9 step 5.3: least-squares decay rate of ln(O2)
+   against time over the O2 history. base is the o2hist index of the onset sample, so sample i is
+   t = i − base s after the onset; only samples with ta <= t < tb count. A sample equal to the
+   one before it is a missed O2 update (real readings carry m%-level noise, so an exact repeat is
+   not physical) and is left out; the first sample in the history from the onset on is always
+   kept. n = the samples used; k = −slope (1/s), 0 if n < 2. The order of the floating-point
+   operations is the reference's, so the replay matches exactly. */
+typedef struct { int n; double k; } sg_lidfit;
+static sg_lidfit lidFit(const sg_ctl *c, double base, double ta, double tb)
 {
-    if (!(i >= 0) || i >= c->nO2 || i != floor(i)) return NAN;
-    return c->o2hist[(int)i];
+    const double *h = c->o2hist;
+    int i, i0 = base > 0 ? (int)base : 0;
+    double sx = 0, sy = 0, mx, my, sxy = 0, sxx = 0, t;
+    sg_lidfit f;
+    f.n = 0; f.k = 0;
+    for (i = i0; i < c->nO2; i++) {
+        t = i - base;
+        if (t < ta || t >= tb || (i > i0 && h[i] == h[i - 1])) continue;
+        f.n++; sx += t; sy += log(h[i]);
+    }
+    if (f.n < 2) return f;
+    mx = sx / f.n; my = sy / f.n;
+    for (i = i0; i < c->nO2; i++) {
+        double dx;
+        t = i - base;
+        if (t < ta || t >= tb || (i > i0 && h[i] == h[i - 1])) continue;
+        dx = t - mx;
+        sxy += dx * (log(h[i]) - my); sxx += dx * dx;
+    }
+    f.k = -(sxy / sxx);
+    return f;
 }
 
 /* doPurge (line 1340), spec §4.2 / §4.3, including the lid inference from purge kinetics */
@@ -497,30 +524,40 @@ static void doPurge(sg_ctl *c)
                 stopOpen(c, msg);
                 return;
             }
+            /* Least-squares rates over the kept samples of the window and of its two halves
+               (split at its midpoint in time). Too few O2 updates in a half: wait, up to
+               2 lidWindow, then judge on the ratio alone (user's decision 2026-09-30). */
             if (!isnan(sd->onsetT) && el >= sd->onsetT + p->lidWindow) {
                 double kExp = p->purgeFlow / p->V / 60;          /* 1/s, lid on */
-                double span = el - sd->onsetT, half = floor(span / 2);
-                int n = c->nO2;
-                double cMid = o2histAt(c, n - 1 - (span - half));
-                double kObs = log(sd->cOn / c->o2) / span;
-                double k1 = log(sd->cOn / cMid) / half, k2 = log(cMid / c->o2) / (span - half);
-                double ratio = kObs / kExp, curv = k1 > 0 ? k2 / k1 : 0;
-                sd->dropChecked = 1;
-                sd->kin = ratio; sd->curv = curv; sd->kObs = kObs; sd->checkAt = el; sd->cCheck = c->o2;
-                if (ratio < p->openSlopeFrac || curv < p->lidCurvMin) {
-                    sd->lidResult = SG_LID_OPEN;
-                    snprintf(msg, sizeof msg,
-                             "purge decay %s %% of the lid-on rate, curvature %s: enclosure open?",
-                             sg_fmtN(b1, sizeof b1, 100 * ratio, 0), sg_fmtN(b2, sizeof b2, curv, 2));
-                    stopOpen(c, msg);
-                    return;
+                double span = el - sd->onsetT, mid = span / 2;
+                double base = c->nO2 - 1 - span;                /* o2hist index of the onset */
+                double minN = sg_jmax(2, p->lidMinSamples);
+                sg_lidfit all = lidFit(c, base, 0, span + 1);
+                sg_lidfit h1 = lidFit(c, base, 0, mid), h2 = lidFit(c, base, mid, span + 1);
+                int full = h1.n >= minN && h2.n >= minN;
+                if (full || span >= 2 * p->lidWindow) {
+                    double kObs = all.k, ratio = kObs / kExp;
+                    double curv = !full ? NAN : h1.k > 0 ? h2.k / h1.k : 0;
+                    if (!full)
+                        sg_log(c, 1, "lid check: too few O2 updates for the curvature test (%d/%d): ratio only",
+                               h1.n, h2.n);
+                    sd->dropChecked = 1;
+                    sd->kin = ratio; sd->curv = curv; sd->kObs = kObs; sd->checkAt = el; sd->cCheck = c->o2;
+                    if (ratio < p->openSlopeFrac || (full && curv < p->lidCurvMin)) {
+                        sd->lidResult = SG_LID_OPEN;
+                        snprintf(msg, sizeof msg,
+                                 "purge decay %s %% of the lid-on rate, curvature %s: enclosure open?",
+                                 sg_fmtN(b1, sizeof b1, 100 * ratio, 0), sg_fmtN(b2, sizeof b2, curv, 2));
+                        stopOpen(c, msg);
+                        return;
+                    }
+                    sd->lidResult = SG_LID_PASSED;
+                    sg_log(c, 0, "lid check passed at %s s: decay %s %% of the lid-on rate (open < %s %%), "
+                           "curvature %s (open < %s), %d O2 updates",
+                           sg_fmtJs(b1, sizeof b1, el), sg_fmtN(b2, sizeof b2, 100 * ratio, 0),
+                           sg_fmtN(b3, sizeof b3, 100 * p->openSlopeFrac, 0), sg_fmtN(b4, sizeof b4, curv, 2),
+                           sg_fmtJs(b5, sizeof b5, p->lidCurvMin), all.n);
                 }
-                sd->lidResult = SG_LID_PASSED;
-                sg_log(c, 0, "lid check passed at %s s: decay %s %% of the lid-on rate (open < %s %%), "
-                       "curvature %s (open < %s)",
-                       sg_fmtJs(b1, sizeof b1, el), sg_fmtN(b2, sizeof b2, 100 * ratio, 0),
-                       sg_fmtN(b3, sizeof b3, 100 * p->openSlopeFrac, 0), sg_fmtN(b4, sizeof b4, curv, 2),
-                       sg_fmtJs(b5, sizeof b5, p->lidCurvMin));
             }
         }
     }

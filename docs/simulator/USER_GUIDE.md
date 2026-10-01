@@ -83,7 +83,7 @@ scenario**. Each scenario's description says what to watch for.
 |---|---|---|
 | IDLE | not touched | The controller is not managing the flow |
 | PRECHECK | not touched | Checks and fixes the Alicat before a purge: resumes it from hold, clamps a bad ramp rate, warns about the gas table |
-| PURGE | 20 SLPM | Purging; the lid check runs ~25 s after full flow |
+| PURGE | 20 SLPM | Purging; the lid check runs ~40 s after full flow |
 | HANDOFF | expected flow for the mode | Stepping down, then feedback on |
 | REGULATE | PID | Holding O2 at the target |
 | OPEN_LOOP | expected flow, fixed | The O2 reading was lost (invalid or frozen); no feedback possible |
@@ -96,9 +96,17 @@ scenario**. Each scenario's description says what to watch for.
 ### Purge
 
 - 20 SLPM.
-- **Lid check:** waits for the O2 decay to start (a 2 % drop). It then judges 15 s of decay.
+- **Lid check:** waits for the O2 decay to start (a 2 % drop). It then judges 30 s of decay
+  (15 s until 2026-09-30).
   - **Lid open** if the decay rate is below half the lid-on rate (flow ÷ volume), or if the decay
-    levels off (curvature below 0.8).
+    levels off (curvature below 0.8: the second half's rate over the first half's).
+  - The rates are least-squares fits over all the readings in the window. A reading equal to the
+    one before it means no new analyzer update reached the controller that second, and is left
+    out (user's decision 2026-09-30: such repeats had brought a closed-lid purge within 0.02 of
+    the curvature limit).
+  - Each half needs at least 4 updates (`lidMinSamples`) for the curvature test. With fewer, the
+    check waits, up to 60 s after the onset; then it judges on the rate alone and logs
+    "too few O2 updates for the curvature test … ratio only" (MINOR).
   - If no decay starts within 30 s, the lid is also open.
   - The check is skipped if the purge starts below 17 % O2, which proves the lid was on
     (lowered from 18 %, user's decision 2026-09-30: lid-open handling dips to ~18.4 % are
@@ -210,7 +218,7 @@ scenario says otherwise. Your other settings are kept.
 | # | Scenario | What to watch |
 |---|---|---|
 | 1 | Normal purge from air, normal lid | Lid check passes; handoff; regulation |
-| 2 | Purge with the lid left open | OPEN_STOP at the lid check (~25 s) |
+| 2 | Purge with the lid left open | OPEN_STOP at the lid check (~40 s) |
 | 3 | Lid lifted during regulation | OPEN_STOP ~10 s after the lift |
 | 4 | Flow Zero, lid kept on 22 min, then Purge | No false trip; lid check skipped (O2 < 17 %) |
 | 5 | Flow Zero, lift 76 s later, 2 min open, re-purge | The measured 24 Sep sequence |

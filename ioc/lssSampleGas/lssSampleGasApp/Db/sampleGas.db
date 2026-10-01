@@ -166,7 +166,7 @@ record(ao, "$(P)Par:lidWindow") {
     field(PREC, "0")
     field(DRVL, "4")
     field(DRVH, "60")
-    field(VAL, "15")
+    field(VAL, "30")
     field(PINI, "YES")
 }
 
@@ -176,6 +176,15 @@ record(ao, "$(P)Par:lidCurvMin") {
     field(DRVL, "0.1")
     field(DRVH, "1")
     field(VAL, "0.8")
+    field(PINI, "YES")
+}
+
+record(longout, "$(P)Par:lidMinSamples") {
+    field(DESC, "O2 updates per half for curvature test")
+    field(EGU, "samples")
+    field(DRVL, "2")
+    field(DRVH, "30")
+    field(VAL, "4")
     field(PINI, "YES")
 }
 

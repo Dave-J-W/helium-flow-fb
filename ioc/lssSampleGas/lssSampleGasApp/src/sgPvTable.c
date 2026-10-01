@@ -23,6 +23,7 @@ const sgParPv sgParPvs[] = {
     { "Par:lidOnsetMax", offsetof(sg_params, lidOnsetMax), 0 },
     { "Par:lidWindow", offsetof(sg_params, lidWindow), 0 },
     { "Par:lidCurvMin", offsetof(sg_params, lidCurvMin), 0 },
+    { "Par:lidMinSamples", offsetof(sg_params, lidMinSamples), 1 },
     { "Par:openSlopeFrac", offsetof(sg_params, openSlopeFrac), 0 },
     { "Par:dropSkipLevel", offsetof(sg_params, dropSkipLevel), 0 },
     { "Par:cylCapacityL", offsetof(sg_params, cylCapacityL), 0 },

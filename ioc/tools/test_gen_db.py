@@ -285,9 +285,10 @@ class TestBanner(unittest.TestCase):
 
 
 class TestDeepGroups(unittest.TestCase):
-    def test_49_d_level_keys_in_exactly_one_group(self):
+    def test_50_d_level_keys_in_exactly_one_group(self):
         d_keys = {p["key"] for p in sg_pvs.PARAMS if p["level"] == "D"}
-        self.assertEqual(len(d_keys), 49)   # 51 until the ramp clamps moved to Admin (2026-09-29)
+        # 51 until the ramp clamps moved to Admin (2026-09-29); 50 with lidMinSamples (2026-09-30)
+        self.assertEqual(len(d_keys), 50)
 
         spec_groups = parse_13_3_groups()
         self.assertEqual(set(spec_groups), set(sg_pvs.DEEP_GROUPS))

@@ -82,8 +82,10 @@ and corrects what it must (PRECHECK). Then it purges at full flow (PURGE):
 ![Purge in progress](img/main_purge.png)
 
 Within the first minute of the purge it checks that the O2 falls the way it does with the lid
-on. If it doesn't, the enclosure is probably open: it stops the flow (OPEN_STOP) instead of emptying the
-cylinder. When the O2 is below the target, it steps the flow down to the expected flow (HANDOFF)
+on (it judges 30 s of the decay, about 40 s after full flow). If it doesn't, the enclosure is probably open: it stops the flow (OPEN_STOP) instead of emptying the
+cylinder. If the O2 reading updates too rarely for the full check, the log says
+`lid check: too few O2 updates for the curvature test … ratio only` (MINOR) and the check uses
+the decay rate alone, up to a minute later: check the O2 analyzer and its IOC. When the O2 is below the target, it steps the flow down to the expected flow (HANDOFF)
 and turns the feedback on (REGULATE). The purge ends by itself; there is nothing more to press.
 
 ### Stop the helium
@@ -221,5 +223,5 @@ again: the purge's lid check stops the flow if the enclosure is open.
   label. Edit, then **Apply PV names** (only in IDLE; confirmation). A new Alicat re-baselines the
   helium totalizer; press New He cylinder fitted if the cylinder is different too.
 - **Enclosure modes:** name, base flow and exponent for each of the four slots.
-- **Thresholds, timing and limits:** the other 49 parameters in nine groups. The defaults come from
+- **Thresholds, timing and limits:** the other 50 parameters in nine groups. The defaults come from
   the enclosure measurements; change them only with a reason, and note it in the log book.

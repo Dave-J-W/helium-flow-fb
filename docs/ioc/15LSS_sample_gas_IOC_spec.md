@@ -717,21 +717,65 @@ wrong, so this is on the banner, not only in the log (conformance audit 2026-09-
      2. **No onset:** if `onsetT` is unset and `el` ≥ `lidOnsetMax`: `dropChecked` = true, result
         = open. Enter OPEN_STOP and raise `Alm:OpenStop` = 2,
         `no O2 decay within <lidOnsetMax> s of full flow: enclosure open?`. Return.
-     3. **Decision,** once `onsetT` is set and `el` ≥ `onsetT` + `lidWindow`:
-        - `dropChecked` = true
-        - kExp = `purgeFlow` / `V` / 60 (1/s); span = `el` − `onsetT`;
-          half = floor(span / 2)
-        - cMid = the O2 sample `span − half` ticks before now (from `o2hist`)
-        - kObs = ln(`cOn` / o2) / span; k1 = ln(`cOn` / cMid) / half;
-          k2 = ln(cMid / o2) / (span − half)
-        - ratio = kObs / kExp; curv = k1 > 0 ? k2 / k1 : 0
-        - store ratio, curv, kObs, `checkAt` = `el`, `cCheck` = o2
-        - **Open** if ratio < `openSlopeFrac` **or** curv < `lidCurvMin`: enter OPEN_STOP and raise
-          `Alm:OpenStop` = 2,
-          `purge decay <100·ratio:.0f> % of the lid-on rate, curvature <curv:.2f>: enclosure open?`.
-          Return.
+     3. **Decision,** checked every tick once `onsetT` is set and `el` ≥ `onsetT` + `lidWindow`:
+        - kExp = `purgeFlow` / `V` / 60 (1/s); span = `el` − `onsetT`.
+        - **Samples:** the `o2hist` samples from the onset to now; sample i is t = i − base s
+          after the onset, base = (length of `o2hist`) − 1 − span. A sample **equal to the one
+          before it is dropped** (a missed O2 update: real readings carry m%-level noise, so an
+          exact repeat is not physical); the onset sample is always kept.
+        - **Rates** (`lidFit`): k = −(least-squares slope of ln(O2) against t) over the kept
+          samples of a range, with n = the number of kept samples (k = 0 if n < 2):
+          - kObs over the whole window, 0 ≤ t ≤ span (n = nAll)
+          - k1 over the first half, t < span / 2 (n1); k2 over the second half, t ≥ span / 2 (n2)
+        - **Enough updates?** full = n1 ≥ max(2, `lidMinSamples`) and n2 ≥ max(2, `lidMinSamples`).
+          - Not full and span < 2·`lidWindow`: **keep waiting** (decide again next tick).
+          - Not full and span ≥ 2·`lidWindow`: **ratio only.** Log MINOR
+            `lid check: too few O2 updates for the curvature test (<n1>/<n2>): ratio only`.
+        - When it decides: `dropChecked` = true; ratio = kObs / kExp;
+          curv = full ? (k1 > 0 ? k2 / k1 : 0) : not a number; store ratio, curv, kObs,
+          `checkAt` = `el`, `cCheck` = o2.
+        - **Open** if ratio < `openSlopeFrac`, **or** (full and curv < `lidCurvMin`): enter
+          OPEN_STOP and raise `Alm:OpenStop` = 2,
+          `purge decay <100·ratio:.0f> % of the lid-on rate, curvature <curv:.2f>: enclosure open?`
+          (curvature `–` when ratio only). Return.
         - **Passed:** log
-          `lid check passed at <el> s: decay <..> % of the lid-on rate (open < <..> %), curvature <..> (open < <lidCurvMin>)`.
+          `lid check passed at <el> s: decay <..> % of the lid-on rate (open < <..> %), curvature <..> (open < <lidCurvMin>), <nAll> O2 updates`.
+        - The O2 history (`o2hist`) holds at least max(90, `stallWindow` + `slopeAvgN` + 5,
+          2·`lidWindow` + 5) samples, so the onset sample is still in it at span 2·`lidWindow`.
+
+   > **Why least squares, the 30 s window and the fallback (user's decision 2026-09-30).**
+   > Until then the rates came from three single samples (`cOn`, the sample at span/2, the
+   > current one) over 15 s. A 1 Hz archive analysis of every 20 SLPM purge of 20-30 Sep (the
+   > C core driven by the archived O2 and Flow_RBV; the harness is not in the repository):
+   > - No closed-lid purge was judged open, but the curvature margin was small: minimum
+   >   curvature 0.823 (margin +0.023 to 0.8, purge of 30 Sep 12:51), ratio margin +0.49.
+   > - The cause was **repeated O2 values at the 1 s tick**: 17 % of the samples early in that
+   >   purge. A repeat at one of the three points biases k2. (Correction, 2026-10-01: that file was
+   >   the archiver's mean_1 resampling. The raw record has no missed updates in any of these
+   >   purges: one sample per 1.000 s, longest interval 1.02 s, no exact repeats. The repeats come
+   >   from the sample instants sitting within ~20 ms of the 1 s grid, so a tick can catch no new
+   >   sample (and the next tick two). An IOC ticking at 1 s sees the same when its tick phase meets
+   >   the analyzer's: 0.15-0.33 % of all ticks, depending on the phase, and 13 % of the ticks in
+   >   that purge at phase 0.)
+   > - Monte Carlo through the C core (26 real purges, missed updates added at random): false
+   >   stops 0.9 % at 10 % missed, 1.7 % at 14 %, 3.1 % at 20 %. An O2 PV updating every 10 s was
+   >   judged open on every purge.
+   >
+   > The user chose (no false stops of the helium, and no silent inaction) least-squares rates
+   > that drop repeated samples, `lidWindow` 15 → 30 s, and the `lidMinSamples` wait with the
+   > ratio-only fallback, which still catches a really open lid (ratio about 0–0.25 in the data
+   > and the simulator) and no longer stops a closed one on a slow O2 PV.
+   >
+   > **Rerun with the new check (2026-10-01),** same 26 closed-lid purges: minimum ratio 1.06
+   > (margin +0.56), minimum curvature 0.90 (margin +0.10; the 30 Sep 12:51 purge now 1.04).
+   > Monte Carlo, 26 000 checks per rate: no false stop from the rate or curvature test at 5,
+   > 10, 14, 20 or 30 % missed updates (old check, same draws: 0.29, 0.90, 1.55, 3.25,
+   > 6.41 %); none with 2, 3, 5 or 10 s O2 updates (10 s: ratio only), none on the 18
+   > pre-24 Sep purges archived as 10 s samples (old: 3 of 18). Remaining false stops come only
+   > from step 5.2 (no onset within `lidOnsetMax`), when a 10 s O2 PV also misses updates
+   > (1.75 % at 14 % missed 10 s updates); 5.2 is unchanged. On the raw O2 as a 1 s-tick
+   > client sees it (any tick phase, raw 10 s Flow_RBV): no closed lid judged open, minimum
+   > ratio 1.05, minimum curvature 0.90.
 
 ### 8.10 PURGE: handoff and timeout (`doPurge`, second part; `purgeTimeout`)
 
@@ -1227,8 +1271,9 @@ restart reset every source.
 | V | 41 | L | 5 | 200 | D | Enclosure volume (lid-on decay rate F/V) |
 | lidOnsetFrac | 0.02 | – | 0.005 | 0.2 | D | Decay onset = relative drop |
 | lidOnsetMax | 30 | s | 10 | 180 | D | No onset within → open |
-| lidWindow | 15 | s | 4 | 60 | D | Decay measured over |
+| lidWindow | 30 | s | 4 | 60 | D | Decay measured over (15 until 2026-09-30, §8.9) |
 | lidCurvMin | 0.8 | – | 0.1 | 1 | D | Open if 2nd/1st-half rate below |
+| lidMinSamples | 4 | samples | 2 | 30 | D | **NEW:** O2 updates per half for the curvature test (§8.9) |
 | openSlopeFrac | 0.5 | – | 0.05 | 0.95 | D | Open if decay < fraction of F/V |
 | dropSkipLevel | 17 | % | 1 | 21 | D | Lid check skipped if purge starts below |
 | cylCapacityL | 8000 | L | 100 | 50000 | D | Usable He per full cylinder |
@@ -1469,11 +1514,11 @@ reviewed as mockups with the user on 2026-09-25.
 
 ### 13.3 Deep admin (`sampleGas_deep.bob`)
 
-- The D-level parameters (49), in nine labelled groups (decided by the user 2026-09-25):
+- The D-level parameters (50), in nine labelled groups (decided by the user 2026-09-25):
   - **Enclosure and purge:** V, purgeLag, handoffHold, handoffFlowTol, purgeTimeoutMin,
     purgeTimeoutMax, ambientRef
   - **Lid check (during purge):** dropSkipLevel, lidOnsetFrac, lidOnsetMax, lidWindow,
-    openSlopeFrac, lidCurvMin
+    openSlopeFrac, lidCurvMin, lidMinSamples
   - **Lid detector (lid lifted):** lidLevel, lidFilter, lidSlope, lidSlopeWindow, lidArmLevel
   - **PID:** avgN, pidScan, odel, gainSchedule, fineBand, fineKPx, fineKIx, hardCeiling
   - **Settling:** progressMin, stallGrace, stallWindow, slopeAvgN, stallTime, flowSteadyBand,

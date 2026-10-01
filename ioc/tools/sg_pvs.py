@@ -33,8 +33,10 @@ _P91 = [
     ("V", 41, "L", 5, 200, "D", "Enclosure volume (lid-on decay rate F/V)"),
     ("lidOnsetFrac", 0.02, "–", 0.005, 0.2, "D", "Decay onset = relative drop"),
     ("lidOnsetMax", 30, "s", 10, 180, "D", "No onset within → open"),
-    ("lidWindow", 15, "s", 4, 60, "D", "Decay measured over"),
+    # lidWindow 15 -> 30 s and lidMinSamples new: user's decision 2026-09-30 (spec 8.9)
+    ("lidWindow", 30, "s", 4, 60, "D", "Decay measured over"),
     ("lidCurvMin", 0.8, "–", 0.1, 1, "D", "Open if 2nd/1st-half rate below"),
+    ("lidMinSamples", 4, "samples", 2, 30, "D", "O2 updates per half for curvature test"),
     ("openSlopeFrac", 0.5, "–", 0.05, 0.95, "D", "Open if decay < fraction of F/V"),
     ("dropSkipLevel", 17, "%", 1, 21, "D", "Lid check skipped if purge starts below"),
     ("cylCapacityL", 8000, "L", 100, 50000, "D", "Usable He per full cylinder"),
@@ -106,7 +108,7 @@ _D_GROUP_KEYS = {
     "Enclosure and purge": ["V", "purgeLag", "handoffHold", "handoffFlowTol", "purgeTimeoutMin",
                              "purgeTimeoutMax", "ambientRef"],
     "Lid check (during purge)": ["dropSkipLevel", "lidOnsetFrac", "lidOnsetMax", "lidWindow",
-                                  "openSlopeFrac", "lidCurvMin"],
+                                  "openSlopeFrac", "lidCurvMin", "lidMinSamples"],
     "Lid detector (lid lifted)": ["lidLevel", "lidFilter", "lidSlope", "lidSlopeWindow",
                                    "lidArmLevel"],
     "PID": ["avgN", "pidScan", "odel", "gainSchedule", "fineBand", "fineKPx", "fineKIx",
@@ -121,11 +123,11 @@ _D_GROUP_KEYS = {
 }
 
 # Integer parameters (§7.2: "Integer parameters are longout"). Everything else in _P91 is a
-# continuous quantity (ao), even where the default happens to be a whole number. These four are
-# genuinely discrete: two sample/attempt counts and one 0/1 flag. (Record-type decision left to
+# continuous quantity (ao), even where the default happens to be a whole number. These five are
+# genuinely discrete: four sample/attempt counts and one 0/1 flag. (Record-type decision left to
 # the implementer by the spec; writeEnable is 0/1 too but is generated as `bo`, not `longout` —
 # see PARAMS_WRITE_ENABLE below.)
-_INTEGER_KEYS = {"avgN", "slopeAvgN", "holdRetries", "gainSchedule"}
+_INTEGER_KEYS = {"avgN", "slopeAvgN", "holdRetries", "gainSchedule", "lidMinSamples"}
 
 
 def _key_to_group(key, level):
@@ -165,8 +167,8 @@ for _key, _default, _unit, _min, _max, _level, _meaning in _P91:
         "desc": _meaning,
     })
 
-assert len(PARAMS) == 65, len(PARAMS)
-assert sum(1 for p in PARAMS if p["level"] == "D") == 49
+assert len(PARAMS) == 66, len(PARAMS)
+assert sum(1 for p in PARAMS if p["level"] == "D") == 50
 
 # ---------------------------------------------------------------------------
 # 9.2 Mode-slot limits and 7.4 mode-slot defaults (Mode:<X>:<field>, X in A..D).

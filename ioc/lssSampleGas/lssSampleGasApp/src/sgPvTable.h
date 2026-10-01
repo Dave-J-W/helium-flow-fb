@@ -7,9 +7,9 @@
 /* sgParPvs[i].suffix is the PV suffix INCLUDING the "Par:" prefix (e.g. "Par:target"). To form
    the full record name, the glue prepends only the station macro: "$(P)" + suffix, e.g.
    "$(P)" "Par:target" = "$(P)Par:target". offset is offsetof(sg_params, <field>) for the same
-   field the key names (suffix "Par:target" -> field target). isInt is 1 for the four params
-   whose EPICS record is longout (avgN, slopeAvgN, holdRetries, gainSchedule); the underlying
-   sg_params field is still a double in every case.
+   field the key names (suffix "Par:target" -> field target). isInt is 1 for the five params
+   whose EPICS record is longout (avgN, slopeAvgN, holdRetries, gainSchedule, lidMinSamples);
+   the underlying sg_params field is still a double in every case.
    "target" is present here (offset is valid) but the glue must call sg_set_target(), not a raw
    store, so that a change while REGULATE starts settling (spec §8.12).
    "writeEnable" has NO entry: it is not a field of sg_params (it is IOC-glue state, spec §8.20). */
