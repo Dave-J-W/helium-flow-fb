@@ -1271,7 +1271,7 @@
       </foreground_color>
       <horizontal_alignment>0</horizontal_alignment>
       <vertical_alignment>1</vertical_alignment>
-      <tooltip>dropSkipLevel: Lid check skipped if purge starts below. Default 18, limits 1 to 21 %.</tooltip>
+      <tooltip>dropSkipLevel: Lid check skipped if purge starts below. Default 17, limits 1 to 21 %.</tooltip>
     </widget>
     <widget type="textentry" version="3.0.0">
       <name>par_dropSkipLevel</name>
@@ -1284,7 +1284,7 @@
         <font family="Liberation Sans" style="REGULAR" size="11.0" />
       </font>
       <show_units>false</show_units>
-      <tooltip>dropSkipLevel: Lid check skipped if purge starts below. Default 18, limits 1 to 21 %.</tooltip>
+      <tooltip>dropSkipLevel: Lid check skipped if purge starts below. Default 17, limits 1 to 21 %.</tooltip>
     </widget>
     <widget type="label" version="2.0.0">
       <name>unit_dropSkipLevel</name>

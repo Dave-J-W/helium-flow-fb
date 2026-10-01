@@ -836,7 +836,7 @@ function defaultControllerParams() {
       A: { name: 'Normal lid', baseFlow: 0.25, n: 1.0, KP: -9.3, KI: 8.8e-4, drvh: 1.0, drvl: 0.05 },
       B: { name: 'Collimator lid', baseFlow: 0.84, n: 0.53, KP: -10, KI: 1.4e-3, drvh: 2.0, drvl: 0.3 },   // KP/KI retuned 2026-09-25; per-lid minimum flow (user)
     },
-    purgeFlow: 20, dropSkipLevel: 18,
+    purgeFlow: 20, dropSkipLevel: 17,
     purgeTimeoutMargin: 1.3,   // timeout = margin × kinetic purge time to target − Δ (scales with target)
     purgeTimeoutMin: 120, purgeTimeoutMax: 1800,   // s, clamps
     ambientRef: 19.4,          // % O2 assumed at purge start when the analyzer is unavailable (blind purge)

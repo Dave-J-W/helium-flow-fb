@@ -85,7 +85,7 @@ class Plant:
         pp = self.pp
         self.t = 0
         self.lid = 'closed'; self.lid_type = 'A'; self.crack = False; self.seal = 1.0
-        self.last_lift = -1e9; self.dip_until = -1
+        self.last_lift = -1e9; self.dip_until = -1; self.dip_amount = 0.6
         amb = self.ambient()
         self.C = amb; self.zone = amb
         self.hist_len = math.ceil(200 / DT)
@@ -101,7 +101,7 @@ class Plant:
         pp = self.pp
         a = pp['ambientBase'] + (pp['ambientPeak'] - pp['ambientBase']) * math.exp(-(self.t - self.last_lift) / pp['ambientRelax'])
         if self.t < self.dip_until:
-            a -= 0.6
+            a -= self.dip_amount
         return a
 
     def _ingress(self, F):
@@ -217,8 +217,15 @@ class Plant:
     def reseat(self):
         self.seal = clamp(math.exp(math.log(1.3) * self._gauss()), 0.6, 1.8)
 
-    def breath_dip(self):                           # ambient -0.6 % for 60 s (sample_gas_simulator.html:2073)
-        self.dip_until = self.t + 60
+    def breath_dip(self, amount=0.6):                # ambient -amount % for 60 s (sample_gas_simulator.html:2073;
+        self.dip_until = self.t + 60                 # default amount matches the reference exactly)
+        self.dip_amount = amount
+
+    def handling_dip(self):
+        # Deeper than breath_dip: models an open-lid *handling* dip (user, 2026-09-30), not the
+        # reference's breath/He-pocket dip. No JS reference equivalent -- test-only, for exercising
+        # dropSkipLevel (17 %) at a purge-start O2 around 17.5 %, from an ambientBase of 19.2 %.
+        self.breath_dip(amount=1.7)
 
     def steady_at(self, F):                          # O2 steady state for a given flow (lid closed)
         C = 1

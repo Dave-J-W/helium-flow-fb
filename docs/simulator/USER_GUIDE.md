@@ -100,7 +100,9 @@ scenario**. Each scenario's description says what to watch for.
   - **Lid open** if the decay rate is below half the lid-on rate (flow ÷ volume), or if the decay
     levels off (curvature below 0.8).
   - If no decay starts within 30 s, the lid is also open.
-  - The check is skipped if the purge starts below 18 % O2, which proves the lid was on.
+  - The check is skipped if the purge starts below 17 % O2, which proves the lid was on
+    (lowered from 18 %, user's decision 2026-09-30: lid-open handling dips to ~18.4 % are
+    common, below the archive's floor of 18.67 % for a steady open-lid reading).
 - **Handoff:** when the **lag-corrected** O2 has been below target − Δ for 5 s.
   - Δ = −0.04 %, i.e. hand off slightly *above* target.
   - The correction removes the analyzer's ~12 s lag at full flow, during which it reads ~10 %
@@ -210,7 +212,7 @@ scenario says otherwise. Your other settings are kept.
 | 1 | Normal purge from air, normal lid | Lid check passes; handoff; regulation |
 | 2 | Purge with the lid left open | OPEN_STOP at the lid check (~25 s) |
 | 3 | Lid lifted during regulation | OPEN_STOP ~10 s after the lift |
-| 4 | Flow Zero, lid kept on 22 min, then Purge | No false trip; lid check skipped (O2 < 18 %) |
+| 4 | Flow Zero, lid kept on 22 min, then Purge | No false trip; lid check skipped (O2 < 17 %) |
 | 5 | Flow Zero, lift 76 s later, 2 min open, re-purge | The measured 24 Sep sequence |
 | 6 | Collimator lid fitted, mode A selected | Flow ≥ 2× expected once settled |
 | 7 | Cylinder runs dry during regulation | Flow mismatch; O2 creeps past 10 % without tripping OPEN_STOP |

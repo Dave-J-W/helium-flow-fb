@@ -152,6 +152,7 @@ the second, not on the second itself -- see `--phase` above).
 | `<W>Reseat` | int | put `1` re-randomizes the lid seal factor; any other value is ignored |
 | `<W>ClearHold` | int | put `1` clears a `stuck` hold and resumes; any other value is ignored |
 | `<W>BreathDip` | int | put `1` dips ambient O2 by 0.6 % for 60 s; any other value is ignored |
+| `<W>HandlingDip` | int | put `1` dips ambient O2 by 1.7 % for 60 s (deeper than `BreathDip`; models an open-lid handling dip toward ~17.5 % from the ~19.2 % ambient base, for testing `dropSkipLevel`); any other value is ignored; test-only, no JS reference equivalent |
 | `<W>LidType` | enum `A`/`B` | selects the ingress model (`A` = normal lid, `B` = collimator lid) |
 | `<W>Hold` | enum `current`/`open`/`stuck` | `current` holds at present flow, `open` holds at `holdOpenFlow` (0.7 SLPM), `stuck` also blocks `Run` until `ClearHold` |
 | `<W>SetRamp` | float | same underlying ramp as `<A>RampRate` -- a world-level way to change the device's ramp rate |

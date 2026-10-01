@@ -8,6 +8,8 @@ them under "Bench tests to run after the merge"), in real time, one test per ite
   test_d8_release_in_start_wait D8:  Release control pressed during that wait -> IDLE, no put
   test_mfc_dropout              §8.18: the plant (Alicat) gone ~10 s in REGULATE: alarm, no put, re-send, no D6 mismatch
   test_start_heartbeat          af476b9: Sts:Heartbeat advances and Sts:TickAge <= 1 during the start-up wait
+  test_dropskip_open_lid_caught      dropSkipLevel 17 % (2026-09-30): open lid at o2Start ~17.5 % is caught
+  test_dropskip_closed_lid_passes    dropSkipLevel 17 % (2026-09-30): closed lid at o2Start ~17.5 % still passes
 
     python -m unittest -v test_fixes            (in ioc/test, bench Python, PYTHONIOENCODING=utf-8)
     SG_FIXES=d1b,g2 python -m unittest -v test_fixes      (a selection, by the names above)
@@ -352,6 +354,122 @@ class FixesTest(unittest.TestCase):
                 self.assertTrue([ln for ln in b.log_lines() if re.search(WAIT_ALARM, ln)])
             finally:
                 rec['path'] = str(save('heartbeat', rec, b))
+
+    # ------------------------------------------------------------------------------------ dropSkipLevel 17 %
+    #
+    # user's decision 2026-09-30 (docs/ioc/15LSS_sample_gas_IOC_spec.md value table;
+    # 2026-09-24-o2-purge-feedback-design.md §2.1.8): dropSkipLevel lowered from 18 % to 17 %,
+    # because lid-open handling dips reach ~18.4 % in the extreme, below the archive's 18.67 %
+    # floor. At the old default, a purge started during such a dip would have skipped the lid
+    # check and sent helium into an open enclosure.
+    #
+    # The two tests below show the decision at o2Start ~= 17.5 % depends on how O2 *moves* during
+    # the purge, not on the starting level: open lid -> caught (OPEN_STOP); closed lid -> passed,
+    # purge continues (spec §8.9 step 5). World:HandlingDip (ioc/test/plantsim/plant.py) dips
+    # ambient O2 by 1.7 % for 60 s (deeper than the reference's World:BreathDip, -0.6 %); combined
+    # with a lid lift, O2 tracks the dipped ambient within ~15-20 s (openTau), landing near 17.5-
+    # 17.9 %, close enough to either leave the lid open (test a) or reclose it there (test b) --
+    # a realistic "handling dip during a brief look/adjustment" in both cases.
+    def _dip_to_17_5(self, b, mk):
+        """Trigger the deep dip and open the lid; wait until Sts:O2 is in [17.3, 17.9] % (close
+        to the dropSkipLevel boundary of 17 %, comfortably above it). Returns that O2 reading."""
+        b.world('HandlingDip', 1)
+        b.world('LiftLid', 1)
+        o2 = wait_until(lambda: (lambda v: v if v is not None and 17.3 <= v <= 17.9 else None)(b.get(P + 'Sts:O2')),
+                         45, 'Sts:O2 in [17.3, 17.9] % after HandlingDip + LiftLid', poll=0.5)
+        step(f'O2 at {o2:.3f} % with the lid open (target ~17.5 %)')
+        return o2
+
+    # (a) Lid left open through the dip: the lid check must run (dropSkipLevel 17 % does not
+    # skip it at o2Start ~17.5 %) and must catch the open lid -- either "no O2 decay" (§8.9 step
+    # 5.2) or the ratio/curvature test (§8.9 step 5.3, ratio < 50 % or curvature < 0.8) -- ending
+    # in OPEN_STOP with the flow stopped. Never "lid check skipped".
+    def test_dropskip_open_lid_caught(self):
+        rec = {'item': 'dropSkipLevel 17 %: open lid at o2Start ~17.5 % is caught'}
+        with Bench(noise=False, tag='fixdropopen') as b:
+            try:
+                mk = b.mark_log()
+                o2_before = self._dip_to_17_5(b, mk)
+                step('Purge with the lid still open')
+                mp = b.mark_log()
+                b.cmd('Purge')
+                b.wait_state('PURGE', 15)
+                o2_start = b.get(P + 'Sts:O2')
+                rec['o2_before_purge'] = o2_before
+                rec['o2Start'] = o2_start
+                self.assertGreaterEqual(o2_start, 17.0, 'o2Start below dropSkipLevel: dip missed the target')
+                self.assertLess(o2_start, 18.0, 'o2Start at/above the old default: not the case under test')
+                self.assertEqual(log_matches(b, mp, 'lid check skipped'), [],
+                                  'lid check wrongly skipped at o2Start >= dropSkipLevel (17 %)')
+                m = wait_log(b, mp,
+                             r'(no O2 decay within \d+ s of full flow: enclosure open\?)'
+                             r'|(purge decay (\d+) % of the lid-on rate, curvature (\d+\.\d+): enclosure open\?)',
+                             60)
+                caught_line = log_matches(b, mp, 'enclosure open\\?')[0]
+                rec['caught'] = caught_line
+                if m.group(3) is not None:
+                    ratio_pct, curv = int(m.group(3)), float(m.group(4))
+                    rec['ratio_pct'], rec['curv'] = ratio_pct, curv
+                    step(f'caught by kinetics: decay {ratio_pct} % of lid-on rate, curvature {curv}')
+                    self.assertTrue(ratio_pct < 50 or curv < 0.8,
+                                     f'ratio {ratio_pct} %, curvature {curv}: neither below its open threshold')
+                else:
+                    step('caught: no O2 decay within lidOnsetMax of full flow')
+                b.wait_state('OPEN_STOP', 20)
+                time.sleep(2)
+                rec['end'] = {'state': b.state(), 'lastCmd': b.get(P + 'Sts:LastCmd'),
+                              'setpoint_rbv': b.get(A1 + 'Setpoint_RBV'), 'alm_openstop': b.get(P + 'Alm:OpenStop'),
+                              'ratio_pv': b.get(P + 'Diag:LidRatio'), 'curv_pv': b.get(P + 'Diag:LidCurv')}
+                step(f"end state {rec['end']['state']}, lastCmd {rec['end']['lastCmd']}, "
+                     f"Setpoint_RBV {rec['end']['setpoint_rbv']}")
+                self.assertEqual(rec['end']['state'], 'OPEN_STOP')
+                self.assertEqual(rec['end']['lastCmd'], 0)
+                self.assertAlmostEqual(rec['end']['setpoint_rbv'], 0, delta=0.05)
+                self.assertEqual(rec['end']['alm_openstop'], 2)
+            finally:
+                rec['path'] = str(save('dropskip-open', rec, b))
+
+    # (b) Lid lifted to reach the dip, then reclosed before Purge: the lid check must still run
+    # (o2Start ~17.5 % >= dropSkipLevel 17 %), and -- because the enclosure genuinely IS sealed --
+    # must pass ("lid check passed ... decay ~100 % of the lid-on rate") and let the purge
+    # continue to HANDOFF, not trip OPEN_STOP. A false OPEN_STOP here would stop helium flowing
+    # into a sealed box for no reason: the user's "no failure to release gas" requirement
+    # (2026-09-30) makes this the more important of the two tests.
+    def test_dropskip_closed_lid_passes(self):
+        rec = {'item': 'dropSkipLevel 17 %: closed lid at o2Start ~17.5 % still passes'}
+        with Bench(noise=False, tag='fixdropclosed') as b:
+            try:
+                mk = b.mark_log()
+                o2_before = self._dip_to_17_5(b, mk)
+                step('reclosing the lid, then Purge immediately')
+                b.world('CloseLid', 1)
+                mp = b.mark_log()
+                b.cmd('Purge')
+                b.wait_state('PURGE', 15)
+                o2_start = b.get(P + 'Sts:O2')
+                rec['o2_before_close'] = o2_before
+                rec['o2Start'] = o2_start
+                self.assertGreaterEqual(o2_start, 17.0, 'o2Start below dropSkipLevel: dip missed the target')
+                self.assertLess(o2_start, 18.0, 'o2Start at/above the old default: not the case under test')
+                self.assertEqual(log_matches(b, mp, 'lid check skipped'), [],
+                                  'lid check wrongly skipped at o2Start >= dropSkipLevel (17 %)')
+                m = wait_log(b, mp, r'lid check passed at (\d+) s: decay (\d+) % of the lid-on rate '
+                                    r'\(open < \d+ %\), curvature (\d+\.\d+) \(open < [\d.]+\)', 90)
+                ratio_pct, curv = int(m.group(2)), float(m.group(3))
+                rec['ratio_pct'], rec['curv'] = ratio_pct, curv
+                step(f'lid check passed: decay {ratio_pct} % of lid-on rate, curvature {curv}')
+                self.assertEqual(log_matches(b, mp, 'enclosure open\\?'), [],
+                                  'a sealed box was wrongly judged open')
+                # The kinetic purge from ~17.5-17.9 % down to target - delta (~1.03 %) at F/V ~=
+                # 0.49 /min takes ~350-400 s (ln(17.7/1.03)/0.0081 s^-1); 600 s leaves margin.
+                b.wait_state('HANDOFF', 600)
+                rec['end'] = {'state': b.state(), 'ratio_pv': b.get(P + 'Diag:LidRatio'),
+                              'curv_pv': b.get(P + 'Diag:LidCurv'), 'alm_openstop': b.get(P + 'Alm:OpenStop')}
+                step(f"end state {rec['end']['state']} (HANDOFF reached; helium kept flowing as it should)")
+                self.assertIn(rec['end']['state'], ('HANDOFF', 'REGULATE'))
+                self.assertEqual(rec['end']['alm_openstop'], 0)
+            finally:
+                rec['path'] = str(save('dropskip-closed', rec, b))
 
 
 if __name__ == '__main__':

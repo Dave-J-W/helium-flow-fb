@@ -194,7 +194,7 @@ record(ao, "$(P)Par:dropSkipLevel") {
     field(PREC, "0")
     field(DRVL, "1")
     field(DRVH, "21")
-    field(VAL, "18")
+    field(VAL, "17")
     field(PINI, "YES")
 }
 

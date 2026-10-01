@@ -1230,7 +1230,7 @@ restart reset every source.
 | lidWindow | 15 | s | 4 | 60 | D | Decay measured over |
 | lidCurvMin | 0.8 | – | 0.1 | 1 | D | Open if 2nd/1st-half rate below |
 | openSlopeFrac | 0.5 | – | 0.05 | 0.95 | D | Open if decay < fraction of F/V |
-| dropSkipLevel | 18 | % | 1 | 21 | D | Lid check skipped if purge starts below |
+| dropSkipLevel | 17 | % | 1 | 21 | D | Lid check skipped if purge starts below |
 | cylCapacityL | 8000 | L | 100 | 50000 | D | Usable He per full cylinder |
 | reportDays | 60 | days | 1 | 73 | D | Usage report window (max 73: the 2000 hourly snapshots of §7.7 cover reportDays + 10 days) |
 | runGap | 216000 | s | 3600 | 2592000 | D | User run closes after no purge for (60 h) |

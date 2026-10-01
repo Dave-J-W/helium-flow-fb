@@ -339,6 +339,8 @@ def build_plant_group(idx, a_prefix, o2_name, w_prefix, plant, noise_on, run_loo
             value=0, dtype=int, name=w_prefix + 'ClearHold', alarm_group=w_prefix + 'ClearHold', put=mk_action(plant.clear_hold)),
         'BreathDip': pvproperty(
             value=0, dtype=int, name=w_prefix + 'BreathDip', alarm_group=w_prefix + 'BreathDip', put=mk_action(plant.breath_dip)),
+        'HandlingDip': pvproperty(
+            value=0, dtype=int, name=w_prefix + 'HandlingDip', alarm_group=w_prefix + 'HandlingDip', put=mk_action(plant.handling_dip)),
         'LidType': pvproperty(
             value=LIDTYPE_STATES.index(plant.lid_type), dtype=ChannelType.ENUM,
             enum_strings=LIDTYPE_STATES, name=w_prefix + 'LidType', alarm_group=w_prefix + 'LidType', put=mk_put_lidtype(plant)),

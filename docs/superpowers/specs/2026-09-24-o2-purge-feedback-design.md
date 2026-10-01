@@ -200,6 +200,12 @@ The model's known departures are listed in 2.1.5.
 - One ~1 min dip reached **18.95 %** with the lid off (breath, or a helium pocket released).
 - The weekly 600 s open-lid samples read 19.03–19.58 %, with occasional 18.7–19.0 % readings while the flow was off.
 - **Any open/closed threshold near 19 % is unsafe.** The design's thresholds (10 %, 9 % arming, 18 % drop-check skip) all clear this range.
+- **Update (2026-09-30):** lid-open baseline about 19.3 %; handling dips reach 18.4 % in the
+  extreme (user, 2026-09-30), below the archive's 18.67 % floor recorded above. At the
+  drop-check skip's old default of 18 %, such a dip lets Purge skip the lid check and send
+  helium into an open enclosure. `dropSkipLevel` lowered to 17 % (user's decision 2026-09-30)
+  to keep a margin below the extreme dip. See §4.6.1 item 4 below for where the skip threshold
+  is used.
 
 ### 2.1.9 Setpoint readback caveat (MEASURED, archiver level)
 
@@ -394,6 +400,10 @@ BASIS manual.**
    - Measured basis: a closed box starting from air has dropped **6.8–7.4 %** by this point (n=2; 2.1.2), so 1.0 % leaves ~7× margin.
      The response of an **open** box to 20 SLPM is unmeasured. The lid-open test (section 8) must confirm it stays below 1 %.
    - The 18 % skip threshold clears every open-lid reading seen (≥ 18.67 %) by at least 0.67 % (2.1.8).
+   - **Note (2026-09-30):** the skip threshold is now 17 %, not 18 % — kept here as history (see
+     2.1.8's 2026-09-30 update). Lid-open baseline is about 19.3 %, but handling dips reach
+     18.4 % in the extreme, below the 18 % this bullet relied on; 17 % restores a margin below
+     that extreme dip.
 5. **Early handoff** (REVISED 2026-09-25):
    - **Rule:** go to HANDOFF when the **lag-corrected** O2 is below target − Δ for `handoffHold`
      (5 s).

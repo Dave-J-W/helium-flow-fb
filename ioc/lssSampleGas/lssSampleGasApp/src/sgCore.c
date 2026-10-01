@@ -56,7 +56,7 @@ void sg_default_params(sg_params *p)
     setMode(&p->modes[1], "Collimator lid", 0.84, 0.53, -10, 1.4e-3, 2.0, 0.3);
     setMode(&p->modes[2], "Spare C", 0.25, 1.0, -9.3, 8.8e-4, 1.0, 0.05);
     setMode(&p->modes[3], "Spare D", 0.25, 1.0, -9.3, 8.8e-4, 1.0, 0.05);
-    p->purgeFlow = 20; p->dropSkipLevel = 18;
+    p->purgeFlow = 20; p->dropSkipLevel = 17;
     p->purgeTimeoutMargin = 1.3;
     p->purgeTimeoutMin = 120; p->purgeTimeoutMax = 1800;
     p->ambientRef = 19.4;

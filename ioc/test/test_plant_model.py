@@ -323,6 +323,38 @@ class TestSemantics(unittest.TestCase):
         self.assertIsNotNone(exceeded_at, 'reading never exceeded 10% O2 within 30 s of lift_lid()')
         self.assertLessEqual(exceeded_at, 30)
 
+    # 11. breath_dip()'s amount (2026-09-30, for dropSkipLevel = 17 % testing): the default
+    #     (0.6 %) is unchanged from the reference (sample_gas_simulator.html:2073/928); an
+    #     explicit amount overrides it; handling_dip() is a deeper (1.7 %) dip with no JS
+    #     reference equivalent (test-only, models an open-lid handling dip); the dip expires
+    #     60 s after it is set, exactly as breath_dip's.
+    def test_breath_dip_default_amount_unchanged(self):
+        p = self.plant
+        before = p.ambient()
+        p.breath_dip()
+        self.assertAlmostEqual(p.ambient(), before - 0.6, places=9)
+
+    def test_breath_dip_custom_amount(self):
+        p = self.plant
+        before = p.ambient()
+        p.breath_dip(amount=1.7)
+        self.assertAlmostEqual(p.ambient(), before - 1.7, places=9)
+
+    def test_handling_dip_is_deeper_than_breath_dip(self):
+        p = self.plant
+        before = p.ambient()
+        p.handling_dip()
+        self.assertAlmostEqual(p.ambient(), before - 1.7, places=9)
+        # from the ~19.2 % ambient base this lands close to the 17.5 % used in the bench test.
+        self.assertAlmostEqual(p.ambient(), 17.5, delta=0.3)
+
+    def test_dip_expires_after_60_s(self):
+        p = self.plant
+        p.handling_dip()
+        dipped = p.ambient()
+        run(p, 61)
+        self.assertGreater(p.ambient(), dipped)
+
 
 if __name__ == '__main__':
     unittest.main()

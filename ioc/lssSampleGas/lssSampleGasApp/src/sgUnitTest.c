@@ -504,6 +504,66 @@ static int t_no_decay(void)
     return 0;
 }
 
+/* R5 a2 (user's decision 2026-09-30): dropSkipLevel lowered from 18 to 17 % because lid-open
+   handling dips reach ~18.4 % in the extreme (docs/ioc/15LSS_sample_gas_IOC_spec.md value
+   table; 2026-09-24-o2-purge-feedback-design.md §2.1.8). The condition is
+   `!(o2Start >= dropSkipLevel)` (true for NaN, as in the reference), so o2Start == dropSkipLevel
+   runs the check, not skips it.
+   - 17.50 %: above the new default -> the lid check runs (here, via the no-decay branch).
+     The same start under the OLD default of 18 % would have been skipped: confirmed below.
+   - 17.00 %: the boundary -> still runs (17.00 >= 17 is true, so NOT skipped).
+   - 16.90 %: below the new default -> still skipped, as before. */
+static int t_drop_skip_level(void)
+{
+    const char *T = "R5a2 dropSkipLevel 17 %";
+    const char *MSG = "no O2 decay within 5 s of full flow: enclosure open?";
+    sg_inputs in = base(17.5);
+    double t;
+
+    /* 17.50 %: the new default (17) runs the lid check. */
+    newCtl();
+    C.p.lidOnsetMax = 5;
+    in.flow = 20; in.sp = 20;
+    startPurge(&in, 17.5);
+    CHECK(T, C.state == SG_PURGE, "17.5%%: state %d", C.state);
+    for (t = 3; t <= 7; t++) tickO2(&in, 17.5, t);
+    CHECK(T, countLogSub("lid check skipped") == 0, "17.5%%: wrongly skipped");
+    tickO2(&in, 17.5, 8);
+    CHECK(T, C.state == SG_OPEN_STOP, "17.5%%: state %d", C.state);
+    CHECK(T, countLog(2, MSG) == 1 && alarmIs(SG_A_OPENSTOP, 2, MSG), "17.5%%: check did not run");
+    CHECK(T, lastPutSp == 0, "17.5%%: flow not stopped: last put %g", lastPutSp);
+
+    /* Same 17.50 % start under the OLD default (18 %): this is the case the user reported —
+       confirms it would have been skipped, letting helium flow into an open enclosure. */
+    newCtl();
+    C.p.lidOnsetMax = 5; C.p.dropSkipLevel = 18;
+    in = base(17.5); in.flow = 20; in.sp = 20;
+    startPurge(&in, 17.5);
+    tickO2(&in, 17.5, 3);
+    CHECK(T, countLog(0, "lid check skipped: purge started at 17.50 % (< 18 %)") == 1,
+          "17.5%% under the old default of 18 %%: should have been skipped");
+
+    /* 17.00 %: the boundary itself still runs the check (>=, not >). */
+    newCtl();
+    C.p.lidOnsetMax = 5;
+    in = base(17.0); in.flow = 20; in.sp = 20;
+    startPurge(&in, 17.0);
+    for (t = 3; t <= 7; t++) tickO2(&in, 17.0, t);
+    CHECK(T, countLogSub("lid check skipped") == 0, "17.00%%: wrongly skipped at the boundary");
+    tickO2(&in, 17.0, 8);
+    CHECK(T, C.state == SG_OPEN_STOP, "17.00%%: state %d", C.state);
+    CHECK(T, countLog(2, MSG) == 1 && alarmIs(SG_A_OPENSTOP, 2, MSG), "17.00%%: check did not run");
+
+    /* 16.90 %: still below the new default -> still skipped. */
+    newCtl();
+    in = base(16.9); in.flow = 20; in.sp = 20;
+    startPurge(&in, 16.9);
+    tickO2(&in, 16.9, 3);
+    CHECK(T, countLog(0, "lid check skipped: purge started at 16.90 % (< 17 %)") == 1,
+          "16.90%%: should still be skipped");
+    return 0;
+}
+
 /* R5 b: purge timeout → PurgeIncomplete latch, then HANDOFF. */
 static int t_purge_timeout(void)
 {
@@ -516,7 +576,7 @@ static int t_purge_timeout(void)
     in.flow = 20; in.sp = 20;
     startPurge(&in, 5);
     for (t = 3; t <= 12; t++) tickO2(&in, 5, t);
-    CHECK(T, countLog(0, "lid check skipped: purge started at 5.00 % (< 18 %)") == 1, "skip log");
+    CHECK(T, countLog(0, "lid check skipped: purge started at 5.00 % (< 17 %)") == 1, "skip log");
     CHECK(T, C.state == SG_PURGE, "left PURGE early: state %d", C.state);
     tickO2(&in, 5, 13);
     CHECK(T, C.state == SG_HANDOFF, "state %d", C.state);
@@ -985,7 +1045,7 @@ static int t_restart_lid(void)
           nPutSp, lastPutSp);
     CHECK(T, countLogSub("lid check") == 0, "lid check before the purge timer");
     tickO2(&in, 12, 101);
-    CHECK(T, countLog(0, "lid check skipped: purge started at 12.00 % (< 18 %)") == 1,
+    CHECK(T, countLog(0, "lid check skipped: purge started at 12.00 % (< 17 %)") == 1,
           "12 %% start: lid check not skipped");
     /* setpoint 0: stays IDLE as before */
     newCtl();
@@ -1570,7 +1630,7 @@ int main(void)
     static int (*const tests[])(void) = {
         t_resume_idle, t_resume_idle_high, t_resume_invalid, t_resume_purge, t_set_mode,
         t_mark_new_run, t_mfc_disconnect, t_mfc_blip, t_resume_mfc, t_forecast_text, t_progress_text,
-        t_no_decay, t_purge_timeout, t_blind_purge, t_handoff_invalid, t_precheck_hold, t_hold_resume_mismatch,
+        t_no_decay, t_drop_skip_level, t_purge_timeout, t_blind_purge, t_handoff_invalid, t_precheck_hold, t_hold_resume_mismatch,
         t_reconnect_mismatch, t_mfc_frozen, t_gas,
         t_flow_high, t_flow_low, t_not_reached, t_pinned_low, t_cyl_low, t_total_backwards,
         t_total_nan, t_ledger_disconnected, t_new_cylinder_disconnected, t_o2_nan, t_restart_mfc, t_restart_lid,
