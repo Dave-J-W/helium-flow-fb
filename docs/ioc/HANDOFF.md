@@ -46,9 +46,19 @@ authority; the user's decisions of 2026-09-28 are written into it.
 - **Bumpless seed:** it is bumpless only for O2 between about 0.91 and 1.01 % (the integral term clamps). The fix would be to ramp the PID target from the current O2. Entering the fine band jumps the flow by about +0.05 SLPM (the user is not worried).
 - **Flow needed at 0.99 %, normal lid:** median 0.254 SLPM (0.20-0.37). Mode A's defaults fit.
 
-**In progress**
-- **O2 update diagnostic** (user's request): `Diag:O2Fresh10m/24h`, `MaxGap`, `Interval` and counts, on branch `ioc-o2diag` (worktree `o2-purge-o2diag`). Observation only, no alarms.
-- **Dropped-update robustness tests:** a plant-sim option that drops O2 updates and jitters them, then the scenario set rerun at about 15 % dropped, compared with the clean run. This audits every rule that reads O2 (user: build for missed updates on a 1 Hz schedule).
+**Done on 1 Oct (merged into `ioc-fixes`, pushed)**
+- **Lid check** made robust (least squares, 30 s window), validated on raw data; golden traces regenerated (backup in the session scratch).
+- **O2 update diagnostic** (`ioc-o2diag`): `Diag:O2Fresh10m/24h`, `MaxGap10m/24h`, `Interval`, `Ticks10m`, `Disconn10m` on the Admin screen.
+- **Missed-update robustness** (`ioc-robust`): the audit plus the offline stress harness (`sgReplay` stress mode, `ioc/test/stress_o2.py`, `make_traces --o2-drop`), and the plant sim's `--o2-drop/--o2-jitter`. Four fixes, neutral without repeats:
+  - "no onset" is judged on a fresh sample;
+  - `lidFit` drops a repeated onset sample;
+  - Pinned and the minimum-flow note allow ODEL;
+  - `aboveCount` counts fresh readings only.
+
+  False stops under stress went from 19 to 0. Bench with 15 % drops (sc01/03/10/15) gives the same decisions as clean. On the merged build: test_fixes 9/9, unit 59/59, glue 36/36, replay 19/19.
+- **Open decisions for the user:**
+  - should `frozenTime` scale with the O2 update period, and should regulation resume by itself after a frozen O2 recovers? (Only a slow PV can cause this.)
+  - FlowHigh can come up to 300 s later under missed updates (never earlier).
 
 ## 0a. State on 2026-09-30 (supersedes 0 where they differ)
 

@@ -8,7 +8,10 @@ the real beamline hardware.
 
 Usage:
     python plant_sim.py [--plant ALICAT_PREFIX,O2_PV,WORLD_PREFIX ...] [--seed N] [--no-noise]
-                         [--second] [--port 5066]
+                         [--second] [--port 5066] [--o2-drop F] [--o2-jitter S] [--o2-seed N]
+
+--o2-drop / --o2-jitter (2026-10-01): the served O2 PV skips that fraction of its 1 s updates
+(posts nothing), or posts them up to S s late, seeded (class O2Feed); <W>O2Skipped counts the skips.
 
 Safety: the server binds to 127.0.0.1 only (never the beamline network) and refuses to start
 (exit code 2) if:
@@ -371,6 +374,9 @@ def build_plant_group(idx, a_prefix, o2_name, w_prefix, plant, noise_on, run_loo
         'AlicatPuts': pvproperty(
             value=0, dtype=int, read_only=True, name=w_prefix + 'AlicatPuts',
             alarm_group=w_prefix + 'AlicatPuts'),
+        'O2Skipped': pvproperty(        # O2 updates skipped by --o2-drop so far
+            value=0, dtype=int, read_only=True, name=w_prefix + 'O2Skipped',
+            alarm_group=w_prefix + 'O2Skipped'),
         'Time': pvproperty(
             value=0.0, dtype=float, read_only=True, name=w_prefix + 'Time', startup=run_loop),
     }
@@ -390,10 +396,59 @@ def _plant_pv_refs(group):
         'gas_rbv': group.Gas_RBV,
         'flowunits_rbv': group.FlowUnits_RBV,
         'o2': group.O2,
+        'o2skipped': group.O2Skipped,
         'cylpressure': group.CylPressure,
         'bulk': group.Bulk,
         'time': group.Time,
     }
+
+
+class O2Feed:
+    """Missed and late O2 updates (the user, 2026-10-01: "building our system to handle missed
+    updates on a ~1Hz schedule is good for robustness"). For each 1 s analyzer update, decide()
+    returns None to skip it (the served O2 PV posts nothing, so a client sees the previous value
+    and time stamp, as when the real analyzer's update is missed), or the delay in seconds after
+    the publish instant at which to post it. drop = the fraction of updates skipped; jitter = the
+    largest delay (uniform in [0, jitter)). jitter < 1 s keeps the updates in order. Its own seeded
+    RNG: the plant's random stream is the same with or without it. Both draws are made for every
+    update, so the drops of a seed do not depend on the jitter setting."""
+
+    def __init__(self, drop=0.0, jitter=0.0, seed=None):
+        if not (0 <= drop < 1):
+            raise ValueError(f'--o2-drop must be in [0, 1), got {drop!r}')
+        if not (0 <= jitter < 1):
+            raise ValueError(f'--o2-jitter must be in [0, 1) s, got {jitter!r}')
+        self.drop, self.jitter = drop, jitter
+        self._rng = random.Random(seed)
+        self.skipped = 0
+        self.posted = 0
+
+    @property
+    def active(self):
+        return self.drop > 0 or self.jitter > 0
+
+    def decide(self):
+        u = self._rng.random()
+        d = self._rng.random() * self.jitter
+        if u < self.drop:
+            self.skipped += 1
+            return None
+        self.posted += 1
+        return d
+
+
+async def _write_o2(pv, value, sevr):
+    if sevr == 3:
+        await pv.write(value, status=AlarmStatus.UDF, severity=AlarmSeverity.INVALID_ALARM,
+                       verify_value=False)
+    else:
+        await pv.write(value, status=AlarmStatus.NO_ALARM, severity=AlarmSeverity.NO_ALARM,
+                       verify_value=False)
+
+
+async def _write_o2_later(pv, value, sevr, delay):
+    await asyncio.sleep(delay)
+    await _write_o2(pv, value, sevr)
 
 
 async def _publish(ctx):
@@ -415,12 +470,17 @@ async def _publish(ctx):
     await pv['flowunits_rbv'].write(r['units'], verify_value=False)
 
     an = plant.an
-    if an['sevr'] == 3:
-        await pv['o2'].write(an['value'], status=AlarmStatus.UDF,
-                              severity=AlarmSeverity.INVALID_ALARM, verify_value=False)
-    else:
-        await pv['o2'].write(an['value'], status=AlarmStatus.NO_ALARM,
-                              severity=AlarmSeverity.NO_ALARM, verify_value=False)
+    feed = ctx.get('o2feed')
+    delay = feed.decide() if feed is not None and feed.active else 0.0
+    if delay is None:                         # a missed update: post nothing
+        await pv['o2skipped'].write(feed.skipped, verify_value=False)
+    elif delay <= 0:
+        await _write_o2(pv['o2'], an['value'], an['sevr'])
+    else:                                     # a late update: the value measured now, posted later
+        task = asyncio.get_running_loop().create_task(
+            _write_o2_later(pv['o2'], an['value'], an['sevr'], delay))
+        ctx.setdefault('o2tasks', set()).add(task)
+        task.add_done_callback(ctx['o2tasks'].discard)
 
     await pv['cylpressure'].write(plant.cyl_p, verify_value=False)
     await pv['bulk'].write(plant.C, verify_value=False)
@@ -599,6 +659,14 @@ def build_arg_parser():
                     help='publish (sample_analyzer/poll_alicat/PV writes) at whole wall-clock '
                          'second + this many seconds, not on the second itself (default 0.75; '
                          'see README "Timing")')
+    p.add_argument('--o2-drop', type=float, default=0.0, metavar='FRACTION',
+                    help='skip this fraction of the 1 s O2 updates (the O2 PV posts nothing), '
+                         'seeded (--o2-seed, default from --seed); 0 = off')
+    p.add_argument('--o2-jitter', type=float, default=0.0, metavar='S',
+                    help='post each O2 update up to this many seconds (< 1) after its publish '
+                         'instant, uniformly at random; 0 = off')
+    p.add_argument('--o2-seed', type=int, default=None,
+                    help='seed of the --o2-drop / --o2-jitter draws (default: from --seed)')
     p.add_argument('--preset', type=float, default=None, metavar='SLPM',
                     help='start plant 0 already at steady state at this flow (as a put to '
                          '<W>Preset, but before the server serves anything, so a client that '
@@ -606,8 +674,20 @@ def build_arg_parser():
     return p
 
 
+def o2_feed_seed(args, idx):
+    """The O2Feed seed of plant idx: --o2-seed, else derived from --seed, else 0 (always seeded)."""
+    base = args.o2_seed if args.o2_seed is not None else (
+        1000 + args.seed if args.seed is not None else 0)
+    return base + idx
+
+
 def main(argv=None):
     args = build_arg_parser().parse_args(argv)
+    try:
+        O2Feed(args.o2_drop, args.o2_jitter)   # validate before anything starts
+    except ValueError as e:
+        print(f'plant_sim.py: refusing to start: {e}', file=sys.stderr)
+        sys.exit(2)
 
     plant_specs = list(args.plant) if args.plant else [DEFAULT_PLANT_1]
     if args.second:
@@ -683,9 +763,13 @@ def main(argv=None):
         group = build_plant_group(idx, a_prefix, o2_name, w_prefix, plant,
                                    noise_on=not args.no_noise, run_loop=run_loop)
         groups.append(group)
-        contexts.append({'plant': plant, 'pv': _plant_pv_refs(group)})
+        contexts.append({'plant': plant, 'pv': _plant_pv_refs(group),
+                         'o2feed': O2Feed(args.o2_drop, args.o2_jitter, o2_feed_seed(args, idx))})
         print(f'plant_sim.py: plant {idx}: Alicat={a_prefix!r} O2={o2_name!r} '
               f'World={w_prefix!r}', file=sys.stderr)
+        if args.o2_drop or args.o2_jitter:
+            print(f'plant_sim.py: plant {idx}: O2 updates: drop {args.o2_drop}, jitter '
+                  f'{args.o2_jitter} s, seed {o2_feed_seed(args, idx)}', file=sys.stderr)
 
     _check_no_duplicate_pv_names(groups)
 

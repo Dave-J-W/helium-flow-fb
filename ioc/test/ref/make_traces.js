@@ -38,7 +38,7 @@ const vm = require('vm');
 
 // ---------------------------------------------------------------------------------------------- arguments
 const args = { html: path.join(__dirname, '..', '..', '..', 'simulator', 'sample_gas_simulator.html'),
-               out: null, seed: 12345, only: null, noise: true };
+               out: null, seed: 12345, only: null, noise: true, drop: 0, burst: 1, dropSeed: 1, holds: [] };
 for (let i = 2; i < process.argv.length; i++) {
   const a = process.argv[i], v = process.argv[i + 1];
   if (a === '--html') { args.html = v; i++; }
@@ -46,8 +46,24 @@ for (let i = 2; i < process.argv.length; i++) {
   else if (a === '--seed') { args.seed = Number(v); i++; if (!Number.isInteger(args.seed)) die(`bad --seed ${v}`); }
   else if (a === '--only') { args.only = v.split(',').map(Number); i++; }
   else if (a === '--no-noise') { args.noise = false; }
+  else if (a === '--o2-drop') { args.drop = Number(v); i++; if (!(args.drop >= 0 && args.drop < 1)) die(`bad --o2-drop ${v}`); }
+  else if (a === '--burst') { args.burst = Number(v); i++; if (!(Number.isInteger(args.burst) && args.burst >= 1)) die(`bad --burst ${v}`); }
+  else if (a === '--drop-seed') { args.dropSeed = Number(v); i++; if (!Number.isInteger(args.dropSeed)) die(`bad --drop-seed ${v}`); }
+  else if (a === '--hold') {
+    const m = /^(\d+(?:\.\d+)?):(\d+(?:\.\d+)?)$/.exec(v || ''); i++;
+    if (!m) die(`bad --hold ${v} (want T:K)`);
+    args.holds.push([Number(m[1]), Number(m[2])]);
+  }
   else die(`unknown argument ${a}`);
 }
+// Missed O2 updates (the user, 2026-10-01: "building our system to handle missed updates on a ~1Hz
+// schedule is good for robustness"): --o2-drop F [--burst N] [--drop-seed S] makes the analyzer miss
+// each 1 s update with probability F (N consecutive per miss), --hold T:K misses every update for K s
+// from t = T. A missed update keeps the previous value and severity; the plant and Math.random are
+// untouched (own RNG), so the reference controller runs closed loop on the perturbed reading and the
+// trace checks the C core on the missed-update paths. Never into golden/: --out is required.
+const perturbed = args.drop > 0 || args.holds.length > 0;
+if (perturbed && args.out === null) die('--o2-drop / --hold need --out (golden/ holds the unperturbed traces)');
 if (args.out === null) args.out = path.join(__dirname, '..', 'golden', ...(args.noise ? [] : ['nonoise']));
 function die(msg) { process.stderr.write(`make_traces: ${msg}\n`); process.exit(2); }
 
@@ -227,6 +243,33 @@ function wrapPut(name, fmt) {
     return orig.apply(this, a);
   };
 }
+// missed O2 updates (see the arguments): an own seeded RNG, reset per scenario
+let dropRng = 0, dropBurstLeft = 0, dropCount = 0;
+function dropRand() {
+  dropRng = (dropRng + 0x6D2B79F5) >>> 0;
+  let t = dropRng;
+  t = Math.imul(t ^ (t >>> 15), t | 1);
+  t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+  return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+}
+if (perturbed) {
+  const origSample = Plant.prototype.sampleAnalyzer;
+  if (typeof origSample !== 'function') die('Plant.prototype.sampleAnalyzer missing');
+  Plant.prototype.sampleAnalyzer = function (...a) {
+    const prev = { value: this.an.value, sevr: this.an.sevr };
+    const ret = origSample.apply(this, a);       // always: the plant's random stream is unchanged
+    if (!(recording && station && this === station.plant)) return ret;
+    const t = station.t;
+    let miss = args.holds.some(([t0, k]) => t >= t0 && t < t0 + k);
+    if (!miss && dropBurstLeft > 0) { miss = true; dropBurstLeft--; }
+    else if (!miss && args.drop > 0 && dropRand() < args.drop / (args.burst * (1 - args.drop) + args.drop)) {
+      miss = true; dropBurstLeft = args.burst - 1;
+    }
+    if (miss) { this.an.value = prev.value; this.an.sevr = prev.sevr; dropCount++; }
+    return ret;
+  };
+}
+
 wrapPut('putSetpoint', a => `sp ${num(a[0])}`);
 wrapPut('putRamp', a => `ramp ${num(a[0])}`);
 wrapPut('putRun', () => 'run');
@@ -257,6 +300,7 @@ for (const { n, sc, T } of runs) {
   if (args.only && !args.only.includes(n)) continue;
   const t0 = Date.now();
   seedRng(args.seed); REF.resetGauss();
+  dropRng = (args.dropSeed * 1000 + n) >>> 0; dropBurstLeft = 0; dropCount = 0;
   const st = new Station('SELFTEST', 'TEST:SampleGas:', 'TEST:Alicat:', 'TEST:O2', '');
   st.silent = true;
   if (!args.noise) {   // st.pp is the plant's own parameter object (Station constructor)
@@ -292,7 +336,7 @@ for (const { n, sc, T } of runs) {
   if (!args.noise) Object.assign(summary[String(n)], { noise: false, seed: args.seed, lidChecks });
   const secs = ((Date.now() - t0) / 1000).toFixed(1);
   console.log(`sc${String(n).padStart(2, '0')}  ${String(st.ctl.state).padEnd(9)}  ${probs.length ? 'FAIL ' + probs.join('; ') : 'pass'}` +
-              `  ${T.dur} s  ${nLines} lines  (${secs} s)`);
+              `  ${T.dur} s  ${nLines} lines  (${secs} s)` + (perturbed ? `  ${dropCount} O2 updates missed` : ''));
 }
 fs.writeFileSync(summaryFile, JSON.stringify(summary, null, 1) + '\n');
 process.exit(fails ? 1 : 0);

@@ -546,7 +546,20 @@ procServ log.
 5. **Rate:** if the history has more than 10 entries, `rate` = (o2 − o2hist[n−11]) / 10 (%/s);
    else 0. Append (`o2ok` ? `rate` : 0) to `rateHist`, keeping `lidSlopeWindow` entries.
    `maxRate` = max(0, max(rateHist)).
-6. **Level:** `aboveCount` = (`o2ok` and `o2` > `lidLevel`) ? `aboveCount` + 1 : 0.
+6. **Level:** `aboveCount` = (`o2ok` and `o2` > `lidLevel`) ? `aboveCount` + (fresh ? 1 : 0) : 0,
+   where fresh = (`sameCount` = 0), i.e. this tick's reading differs from the previous one.
+
+   > **2026-10-01, the user: handle missed updates on a ~1 Hz schedule.** Until then every tick
+   > counted, held readings included, so one spurious reading above `lidLevel` held over 4 missed
+   > updates reached `lidFilter` 5 and, its 10 s rise being far above `lidSlope`, stopped a closed
+   > lid (checked on the core: 0-3 held ticks, no stop; 4, OPEN_STOP). A held reading is not new
+   > evidence: it now keeps the count without adding to it. With a new reading every tick nothing
+   > changes (golden traces exact). A real lift with missed updates trips at its `lidFilter`-th
+   > fresh reading above `lidLevel`, about 1 s later per missed update. The cost is on a slow O2
+   > PV: with a new value only every 10 s, `lidFilter` fresh readings take ~50 s instead of 5 ticks
+   > (which then were one reading counted five times), so the flow stops later and wastes helium.
+   > It never stops anything falsely. `Diag:AboveCount` (EGU s) now counts fresh readings; at 1 Hz
+   > that is still seconds. Approved by the coordinator 2026-10-01.
 7. **Average:** if `o2ok`, append `o2` to `avgBuf`, keeping the last `avgN`.
 8. **Alarm:** if not `o2ok`, raise `Alm:O2Bad` = 2 with text `O2 reading frozen` (if frozen) or
    `O2 reading invalid`. Otherwise clear it.
@@ -724,15 +737,34 @@ wrong, so this is on the banner, not only in the log (conformance audit 2026-09-
    - **Otherwise:**
      1. **Onset:** if `onsetT` is unset and o2 ≤ `o2Start`·(1 − `lidOnsetFrac`), then
         `onsetT` = `el` and `cOn` = o2.
-     2. **No onset:** if `onsetT` is unset and `el` ≥ `lidOnsetMax`: `dropChecked` = true, result
-        = open. Enter OPEN_STOP and raise `Alm:OpenStop` = 2,
+     2. **No onset:** if `onsetT` is unset and `el` ≥ `lidOnsetMax` **and this tick's O2 is a
+        fresh reading** (`sameCount` = 0): `dropChecked` = true, result = open. Enter OPEN_STOP and
+        raise `Alm:OpenStop` = 2,
         `no O2 decay within <lidOnsetMax> s of full flow: enclosure open?`. Return.
+
+        > **2026-10-01, the user: handle missed updates on a ~1 Hz schedule.** A held reading at
+        > `el` ≥ `lidOnsetMax` was read earlier and is no evidence that O2 has not decayed by then,
+        > so the decision waits for the next update, which may still show the onset. The wait is
+        > bounded: a reading held for `frozenTime` makes the purge blind (step 2). Found by the
+        > offline stress harness (`ioc/test/stress_o2.py`): an O2 stall of 29 s at the purge start
+        > stopped closed lids in 6 of the 19 scenarios. A 10 s O2 PV that also misses updates did the
+        > same (1.75 % of purges in the 2026-10-01 archive Monte Carlo). With no repeated readings
+        > (every golden trace) nothing changes. An open lid is still stopped at the first fresh
+        > reading at or after `lidOnsetMax`.
      3. **Decision,** checked every tick once `onsetT` is set and `el` ≥ `onsetT` + `lidWindow`:
         - kExp = `purgeFlow` / `V` / 60 (1/s); span = `el` − `onsetT`.
         - **Samples:** the `o2hist` samples from the onset to now; sample i is t = i − base s
           after the onset, base = (length of `o2hist`) − 1 − span. A sample **equal to the one
           before it is dropped** (a missed O2 update: real readings carry m%-level noise, so an
-          exact repeat is not physical); the onset sample is always kept.
+          exact repeat is not physical), **the onset sample included** (only the very first
+          `o2hist` sample has no predecessor to compare with).
+
+          > **2026-10-01, the user: handle missed updates on a ~1 Hz schedule.** Until then the
+          > onset sample was always kept. When the onset is first seen on a held reading (the
+          > timer starts, step 1, while the analyzer is missing updates), that sample was read
+          > earlier but was placed at t = 0, which bent the fit: in the stress harness a 10-29 s O2
+          > stall at the start of sc13's purge gave curvature 0.75 on a closed lid (OPEN_STOP).
+          > Left out, the fit sees only fresh samples. No golden trace changes.
         - **Rates** (`lidFit`): k = −(least-squares slope of ln(O2) against t) over the kept
           samples of a range, with n = the number of kept samples (k = 0 if n < 2):
           - kObs over the whole window, 0 ≤ t ≤ span (n = nAll)
@@ -973,15 +1005,25 @@ restart reset every source.
 |---|---|---|---|
 | FlowHigh | 0 unless (`alarmsOn` **and** `flowSteady`). Then r = Flow_RBV/expectedFlow: r ≥ `flowMajorX` → 2; r ≥ `flowMinorX` → 1 | `flowAlarmDelay` | `flow ≥ <minorX>× expected: check enclosure` / `flow ≥ <majorX>× expected: check enclosure seal` |
 | FlowLow | 1 if `alarmsOn` and `flowSteady` and OVAL/expectedFlow ≤ `flowLowX`. **Judged on PID demand, not measured flow,** so an empty cylinder does not read as "wrong mode". | `flowAlarmDelay` | `flow ≤ <lowX>× expected: wrong enclosure mode selected?` |
-| Pinned | `pinnedSec` = consecutive ticks with OVAL ≥ DRVH − 1e-6. Level 2 if `alarmsOn` and `pinnedSec` ≥ `pinnedTime`; else cleared. | (inherent) | `PID pinned at max flow: check enclosure seal` |
+| Pinned | `pinnedSec` = consecutive ticks with OVAL ≥ DRVH − max(ODEL, 1e-6) (2026-10-01; was DRVH − 1e-6). Level 2 if `alarmsOn` and `pinnedSec` ≥ `pinnedTime`; else cleared. | (inherent) | `PID pinned at max flow: check enclosure seal` |
 | O2High | Only evaluated while `o2ok`: 0 unless `alarmsOn`; o2 > target + `o2AbnormalOffset` → 2; o2 > target + `tol` → 1 | `flowAlarmDelay` | `O2 above target range` / `O2 abnormally high` |
 
 - **`flowSteady`** = the OVAL history (`stallWindow` + 1 samples, one per tick) shows
   \|OVAL − OVAL W ticks ago\| ≤ `flowSteadyBand`, **and** \|`O2Slope`\| < `o2SteadyRate`.
-- **Minimum-flow note, no alarm:** count ticks with OVAL ≤ DRVL + 1e-6 and o2 < target − tol. When
-  the count reaches exactly `pinnedTime` with `alarmsOn`, log
+- **Minimum-flow note, no alarm:** count ticks with OVAL ≤ DRVL + max(ODEL, 1e-6) and o2 < target −
+  tol. When the count reaches exactly `pinnedTime` with `alarmsOn`, log
   `note: PID at minimum flow and O2 still below target`. The user decided low O2 is not an
   operator alarm.
+
+  > **2026-10-01 (Pinned and the minimum-flow note: within ODEL of the limit).** Found while
+  > checking the controller for missed O2 updates on a ~1 Hz schedule (the user's request). epid
+  > changes OVAL only when the new output differs from it by more than ODEL (0.01), so OVAL can
+  > stay just inside DRVH while the PID asks for DRVH. In the stress harness's sc07, OVAL sat at
+  > 0.9936 against DRVH 1.0, `pinnedSec` never counted, and `PID pinned at max flow` was never
+  > raised. Missed updates only changed where OVAL landed; the gap exists at any input. The test
+  > now allows ODEL. `pinnedTime` is unchanged; the note at DRVL changes the same way, for
+  > symmetry. Approved by the coordinator under the user's rule that "can't act" must be loud.
+  > No golden trace changes.
 
 **Raised elsewhere:** OpenStop (§8.6, §8.9), PurgeIncomplete (§8.10), O2Bad (§8.2), OpenLoop
 (§8.4), HoldStuck (§8.7), Override (§8.14), CylLow (§8.16), Gas and Units (§8.8), Shadow

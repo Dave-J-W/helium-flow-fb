@@ -361,7 +361,12 @@ static void readInputs(sg_ctl *c)
     sg_push_capped(c->rateHist, &c->nRate, SG_RATEHIST, c->o2ok ? rate : 0, p->lidSlopeWindow);
     c->maxRate = 0;                                   /* Math.max(0, ...rateHist) */
     for (i = 0; i < c->nRate; i++) c->maxRate = sg_jmax(c->maxRate, c->rateHist[i]);
-    c->aboveCount = (c->o2ok && v > p->lidLevel) ? c->aboveCount + 1 : 0;
+    /* fresh readings only (sameCount 0): a held reading is not new evidence of a lid lift. One
+       spurious reading held over 4 missed updates met lidFilter 5 and stopped a closed lid; it
+       still keeps the count (no reset), so a real lift with missed updates trips at its 5th
+       fresh reading above lidLevel (the user, 2026-10-01: handle missed updates on a ~1 Hz
+       schedule) */
+    c->aboveCount = (c->o2ok && v > p->lidLevel) ? c->aboveCount + (c->sameCount == 0) : 0;
     if (c->o2ok) sg_push_capped(c->avgBuf, &c->nAvg, SG_AVGBUF, v, p->avgN);
     if (!c->o2ok) sg_set_alarm(c, SG_A_O2BAD, 2, c->frozen ? "O2 reading frozen" : "O2 reading invalid");
     else sg_clear_alarm(c, SG_A_O2BAD, 0);
@@ -458,8 +463,11 @@ static void doPrecheck(sg_ctl *c)
    against time over the O2 history. base is the o2hist index of the onset sample, so sample i is
    t = i − base s after the onset; only samples with ta <= t < tb count. A sample equal to the
    one before it is a missed O2 update (real readings carry m%-level noise, so an exact repeat is
-   not physical) and is left out; the first sample in the history from the onset on is always
-   kept. n = the samples used; k = −slope (1/s), 0 if n < 2. The order of the floating-point
+   not physical) and is left out, the onset sample included: a repeated onset sample was read
+   before the onset tick, and placing it at t = 0 bent the fitted decay (a 10-29 s O2 stall at
+   the purge start gave curvature 0.75 on a closed lid; the user, 2026-10-01: handle missed
+   updates on a ~1 Hz schedule). Only the very first history sample (i = 0) has nothing to repeat.
+   n = the samples used; k = −slope (1/s), 0 if n < 2. The order of the floating-point
    operations is the reference's, so the replay matches exactly. */
 typedef struct { int n; double k; } sg_lidfit;
 static sg_lidfit lidFit(const sg_ctl *c, double base, double ta, double tb)
@@ -471,7 +479,7 @@ static sg_lidfit lidFit(const sg_ctl *c, double base, double ta, double tb)
     f.n = 0; f.k = 0;
     for (i = i0; i < c->nO2; i++) {
         t = i - base;
-        if (t < ta || t >= tb || (i > i0 && h[i] == h[i - 1])) continue;
+        if (t < ta || t >= tb || (i > 0 && h[i] == h[i - 1])) continue;
         f.n++; sx += t; sy += log(h[i]);
     }
     if (f.n < 2) return f;
@@ -479,7 +487,7 @@ static sg_lidfit lidFit(const sg_ctl *c, double base, double ta, double tb)
     for (i = i0; i < c->nO2; i++) {
         double dx;
         t = i - base;
-        if (t < ta || t >= tb || (i > i0 && h[i] == h[i - 1])) continue;
+        if (t < ta || t >= tb || (i > 0 && h[i] == h[i - 1])) continue;
         dx = t - mx;
         sxy += dx * (log(h[i]) - my); sxx += dx * dx;
     }
@@ -517,7 +525,11 @@ static void doPurge(sg_ctl *c)
             if (isnan(sd->onsetT) && c->o2 <= sd->o2Start * (1 - p->lidOnsetFrac)) {
                 sd->onsetT = el; sd->cOn = c->o2;
             }
-            if (isnan(sd->onsetT) && el >= p->lidOnsetMax) {
+            /* Judged on a fresh sample only (sameCount 0): a held reading at el >= lidOnsetMax
+               was read earlier and says nothing about the decay by then; wait for the next
+               update (frozenTime bounds the wait: a reading held that long makes the purge
+               blind). The user, 2026-10-01: handle missed updates on a ~1 Hz schedule. */
+            if (isnan(sd->onsetT) && el >= p->lidOnsetMax && c->sameCount == 0) {
                 sd->dropChecked = 1; sd->kin = 0; sd->lidResult = SG_LID_OPEN;
                 snprintf(msg, sizeof msg, "no O2 decay within %s s of full flow: enclosure open?",
                          sg_fmtJs(b1, sizeof b1, p->lidOnsetMax));

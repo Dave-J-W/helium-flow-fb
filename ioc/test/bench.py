@@ -108,8 +108,11 @@ class Bench:
     the IOC (e.g. {'FORCE_SHADOW': '1'}, which st.cmd passes to the program)."""
 
     def __init__(self, noise=True, seed=None, second_plant=False, write_enable=1, tag='bench',
-                 plant_first=True, ioc_env=None):
+                 plant_first=True, ioc_env=None, o2_drop=0.0, o2_jitter=0.0):
+        """o2_drop, o2_jitter: plant_sim --o2-drop / --o2-jitter (missed and late O2 updates,
+        2026-10-01); 0 = off."""
         self.noise, self.seed, self.second_plant = noise, seed, second_plant
+        self.o2_drop, self.o2_jitter = o2_drop, o2_jitter
         self.write_enable = write_enable
         self.tag = tag
         self.plant_first = plant_first
@@ -176,6 +179,10 @@ class Bench:
             args.append('--second')
         if preset is not None:
             args += ['--preset', str(preset)]
+        if self.o2_drop:
+            args += ['--o2-drop', str(self.o2_drop)]
+        if self.o2_jitter:
+            args += ['--o2-jitter', str(self.o2_jitter)]
         out = self._outfile('plant')
         self.plant_proc = subprocess.Popen(args, cwd=str(HERE), env=dict(os.environ), stdin=subprocess.DEVNULL,
                                            stdout=out, stderr=subprocess.STDOUT)

@@ -1211,7 +1211,8 @@ class Controller {
     this.rateHist.push(this.o2ok ? rate : 0);
     while (this.rateHist.length > p.lidSlopeWindow) this.rateHist.shift();
     this.maxRate = Math.max(0, ...this.rateHist);
-    this.aboveCount = (this.o2ok && v > p.lidLevel) ? this.aboveCount + 1 : 0;
+    // fresh readings only: a held reading (missed update) keeps the count but adds nothing (2026-10-01)
+    this.aboveCount = (this.o2ok && v > p.lidLevel) ? this.aboveCount + (this.sameCount === 0 ? 1 : 0) : 0;
     if (this.o2ok) { this.avgBuf.push(v); while (this.avgBuf.length > p.avgN) this.avgBuf.shift(); }
     if (!this.o2ok) this.setAlarm('o2bad', 2, this.frozen ? 'O2 reading frozen' : 'O2 reading invalid');
     else this.clearAlarm('o2bad');
@@ -1352,21 +1353,22 @@ class Controller {
   // Least-squares decay rate of ln(O2) against time, for the lid check. base = o2hist index of the onset
   // sample, so sample i is t = i − base s after the onset; only ta ≤ t < tb counts. A sample equal to the
   // one before it is a missed O2 update (real readings carry m%-level noise, so an exact repeat is not
-  // physical) and is left out; the first sample from the onset on is always kept.
+  // physical) and is left out, the onset sample included: a repeated onset sample was read before the
+  // onset tick, and placing it at t = 0 bent the fit (2026-10-01, missed updates on a ~1 Hz schedule).
   // Returns { n: samples used, k: −slope in 1/s (0 if n < 2) }.
   lidFit(base, ta, tb) {
     const h = this.o2hist, i0 = Math.max(0, base);
     let n = 0, sx = 0, sy = 0, sxy = 0, sxx = 0;
     for (let i = i0; i < h.length; i++) {
       const t = i - base;
-      if (t < ta || t >= tb || (i > i0 && h[i] === h[i - 1])) continue;
+      if (t < ta || t >= tb || (i > 0 && h[i] === h[i - 1])) continue;
       n++; sx += t; sy += Math.log(h[i]);
     }
     if (n < 2) return { n, k: 0 };
     const mx = sx / n, my = sy / n;
     for (let i = i0; i < h.length; i++) {
       const t = i - base;
-      if (t < ta || t >= tb || (i > i0 && h[i] === h[i - 1])) continue;
+      if (t < ta || t >= tb || (i > 0 && h[i] === h[i - 1])) continue;
       const dx = t - mx;
       sxy += dx * (Math.log(h[i]) - my); sxx += dx * dx;
     }
@@ -1390,7 +1392,8 @@ class Controller {
         this.st.log(0, `lid check skipped: purge started at ${fmtN(sd.o2Start)} % (< ${p.dropSkipLevel} %)`);
       } else {
         if (sd.onsetT == null && this.o2 <= sd.o2Start * (1 - p.lidOnsetFrac)) { sd.onsetT = el; sd.cOn = this.o2; }
-        if (sd.onsetT == null && el >= p.lidOnsetMax) {
+        // Only on a fresh sample: a held reading says nothing about the decay by now (2026-10-01).
+        if (sd.onsetT == null && el >= p.lidOnsetMax && this.sameCount === 0) {
           sd.dropChecked = true; sd.kin = 0;
           this.stopOpen(`no O2 decay within ${p.lidOnsetMax} s of full flow: enclosure open?`); return;
         }
@@ -1486,12 +1489,14 @@ class Controller {
       // judged on the PID's demand (OVAL), not the measured flow, so an empty cylinder does not read as "wrong mode"
       this.debounce('flowLow', settled && flowSteady && this.epid.OVAL / this.expectedFlow() <= p.flowLowX ? 1 : 0,
         `flow ≤ ${p.flowLowX}× expected: wrong enclosure mode selected?`, '', p.flowAlarmDelay);
-      if (this.epid.OVAL >= this.epid.DRVH - 1e-6) this.pinnedSec++; else this.pinnedSec = 0;
+      // Within epid's output deadband (ODEL) of the limit counts as at it: OVAL can otherwise sit just
+      // inside DRVH for good while the PID asks for DRVH, and Pinned is never raised (2026-10-01).
+      if (this.epid.OVAL >= this.epid.DRVH - Math.max(this.epid.ODEL, 1e-6)) this.pinnedSec++; else this.pinnedSec = 0;
       if (settled && this.pinnedSec >= p.pinnedTime) this.setAlarm('pinned', 2, 'PID pinned at max flow: check enclosure seal');
       else this.clearAlarm('pinned');
       // Pinned at minimum flow while O2 stays below target: the enclosure seals better than the selected
       // mode assumes (typically the wrong mode, e.g. collimator mode with the normal lid fitted).
-      if (this.epid.OVAL <= this.epid.DRVL + 1e-6 && this.o2ok && this.o2 < p.target - p.tol) this.pinnedLowSec++; else this.pinnedLowSec = 0;
+      if (this.epid.OVAL <= this.epid.DRVL + Math.max(this.epid.ODEL, 1e-6) && this.o2ok && this.o2 < p.target - p.tol) this.pinnedLowSec++; else this.pinnedLowSec = 0;
       // O2 below target is not worth an operator alarm (user, 2026-09-25): log it once, no alarm.
       if (settled && this.pinnedLowSec === p.pinnedTime) this.st.log(0, 'note: PID at minimum flow and O2 still below target');
       if (this.o2ok) this.debounce('o2High', !settled ? 0 : this.o2 > p.target + p.o2AbnormalOffset ? 2 : this.o2 > p.target + p.tol ? 1 : 0,

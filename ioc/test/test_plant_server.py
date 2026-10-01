@@ -546,6 +546,104 @@ class TestValidationHelpers(unittest.TestCase):
             plant_sim._validate_enum('nonsense', plant_sim.LIDTYPE_STATES, 'LidType')
 
 
+class _FakePV:
+    """Records writes like a caproto ChannelData written with verify_value=False."""
+
+    def __init__(self):
+        self.writes = []
+
+    async def write(self, value, **kw):
+        self.writes.append((time.monotonic(), value, kw.get('severity')))
+
+
+class TestO2Feed(unittest.TestCase):
+    """--o2-drop / --o2-jitter (2026-10-01, the user: handle missed O2 updates on a ~1 Hz
+    schedule): O2Feed decides per update; _publish posts nothing for a skipped update."""
+
+    def test_no_drop_no_jitter_posts_every_update_at_once(self):
+        f = plant_sim.O2Feed()
+        self.assertFalse(f.active)
+        self.assertEqual([f.decide() for _ in range(100)], [0.0] * 100)
+
+    def test_drop_fraction_and_seed(self):
+        f = plant_sim.O2Feed(drop=0.15, seed=7)
+        d = [f.decide() for _ in range(20000)]
+        frac = sum(x is None for x in d) / len(d)
+        self.assertAlmostEqual(frac, 0.15, delta=0.01)
+        self.assertEqual(f.skipped, sum(x is None for x in d))
+        self.assertEqual(f.posted + f.skipped, 20000)
+        g = plant_sim.O2Feed(drop=0.15, seed=7)
+        self.assertEqual([g.decide() for _ in range(20000)], d, 'same seed, same drops')
+        h = plant_sim.O2Feed(drop=0.15, seed=8)
+        self.assertNotEqual([h.decide() for _ in range(200)], d[:200], 'other seed, other drops')
+
+    def test_drops_do_not_depend_on_jitter(self):
+        a = plant_sim.O2Feed(drop=0.2, seed=3)
+        b = plant_sim.O2Feed(drop=0.2, jitter=0.5, seed=3)
+        da = [a.decide() is None for _ in range(5000)]
+        db = [b.decide() for _ in range(5000)]
+        self.assertEqual(da, [x is None for x in db])
+        delays = [x for x in db if x is not None]
+        self.assertTrue(all(0 <= x < 0.5 for x in delays))
+        self.assertGreater(max(delays), 0.4)
+
+    def test_rejects_bad_values(self):
+        for kw in ({'drop': -0.1}, {'drop': 1.0}, {'jitter': -1}, {'jitter': 1.0}):
+            with self.assertRaises(ValueError, msg=kw):
+                plant_sim.O2Feed(**kw)
+
+    def test_refuses_to_start_on_bad_values(self):
+        for args in (['--o2-drop', '1.5'], ['--o2-jitter', '2']):
+            r = subprocess.run([sys.executable, PLANT_SIM, '--port', '5099', *args], cwd=HERE,
+                               env=os.environ.copy(), capture_output=True, text=True, timeout=10)
+            self.assertEqual(r.returncode, 2, (args, r.stderr))
+            self.assertIn('--o2-', r.stderr)
+
+    def test_seed_derivation(self):
+        p = plant_sim.build_arg_parser()
+        self.assertEqual(plant_sim.o2_feed_seed(p.parse_args([]), 0), 0)
+        self.assertEqual(plant_sim.o2_feed_seed(p.parse_args(['--seed', '3']), 1), 1004)
+        self.assertEqual(plant_sim.o2_feed_seed(p.parse_args(['--seed', '3', '--o2-seed', '9']), 1), 10)
+
+    def _publish_many(self, feed, n, spacing=0.0):
+        from plantsim.plant import Plant
+        plant = Plant(seed=1)
+        pv = {k: _FakePV() for k in ('setpoint_rbv', 'flow_rbv', 'total_rbv', 'running_rbv', 'status',
+                                      'ramprate_rbv', 'gas_rbv', 'flowunits_rbv', 'o2', 'o2skipped',
+                                      'cylpressure', 'bulk', 'time')}
+        ctx = {'plant': plant, 'pv': pv, 'o2feed': feed}
+        sampled = []
+
+        async def run():
+            for _ in range(n):
+                for _ in range(4):
+                    plant.step()
+                await plant_sim._publish(ctx)
+                sampled.append(plant.an['value'])
+                await asyncio.sleep(spacing)
+            await asyncio.sleep(1.0)            # let the late writes land
+        asyncio.run(run())
+        return pv, sampled
+
+    def test_publish_skips_dropped_updates(self):
+        feed = plant_sim.O2Feed(drop=0.3, seed=11)
+        ref = plant_sim.O2Feed(drop=0.3, seed=11)
+        pv, sampled = self._publish_many(feed, 200)
+        kept = [v for v in sampled if ref.decide() is not None]
+        self.assertEqual([w[1] for w in pv['o2'].writes], kept, 'the posted values = the kept samples')
+        self.assertEqual(len(kept) + feed.skipped, 200)
+        self.assertGreater(feed.skipped, 30)
+        self.assertEqual(len(pv['flow_rbv'].writes), 200, 'the Alicat readbacks are not dropped')
+        self.assertEqual(pv['o2skipped'].writes[-1][1], feed.skipped)
+
+    def test_publish_jitter_posts_late_and_in_order(self):
+        feed = plant_sim.O2Feed(jitter=0.3, seed=5)
+        t0 = time.monotonic()
+        pv, sampled = self._publish_many(feed, 8, spacing=0.35)
+        self.assertEqual([w[1] for w in pv['o2'].writes], sampled, 'every update posted, in order')
+        self.assertGreater(pv['o2'].writes[-1][0] - t0, 7 * 0.35, 'posted late')
+
+
 # ---------------------------------------------------------------------------------------------
 # I-2 (non-finite puts) at the CA level: the actual behaviour a real client sees on a live
 # server -- a NaN put must not corrupt plant state or take the server down.

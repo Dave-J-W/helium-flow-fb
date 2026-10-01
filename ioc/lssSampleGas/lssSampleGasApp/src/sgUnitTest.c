@@ -1831,9 +1831,176 @@ static int t_cyl_minmax(void)
     return 0;
 }
 
+/* ================================================================ missed O2 updates (M1-M3)
+   The user, 2026-10-01: "building our system to handle missed updates on a ~1Hz schedule is good
+   for robustness". A held value is not new evidence. Found by the offline stress harness
+   (ioc/test/stress_o2.py): holds of 10-29 s (< frozenTime) at the purge start stopped closed lids. */
+
+/* the analyzer misses every update from t = 5 to t = 33 (29 repeats, < frozenTime 30) */
+static int heldPastOnsetMax(long t) { return t >= 5 && t <= 33; }
+
+/* M1 (spec §8.9 step 5.2): "no O2 decay within lidOnsetMax" is judged only on a fresh sample.
+   At el 30 (t = 33) the reading is the t = 4 sample held for 29 s, so it says nothing about
+   el 30: the check waits for the next update (t = 34), which shows the decay, and the lid check
+   then passes. An open lid (no decay, fresh noisy readings) is still stopped, at that update. */
+static int t_onset_fresh(void)
+{
+    const char *T = "M1 no-onset rule on fresh samples only";
+    long td = lidRun(0, 1, 0, heldPastOnsetMax, 200);
+    CHECK(T, countLogSub("no O2 decay within") == 0 && C.state == SG_PURGE,
+          "closed lid stopped on a held reading: state %d", C.state);
+    CHECK(T, C.sd.onsetT == 31 && C.sd.lidResult == SG_LID_PASSED && fabs(C.sd.kin - 1) < 1e-9,
+          "onset el %g lidResult %d ratio %.12f (want onset 31, passed, 1)", C.sd.onsetT,
+          C.sd.lidResult, C.sd.kin);
+    CHECK(T, td == 64, "decided at t %ld (want 64: onset 34 + lidWindow 30)", td);
+    td = lidRun(0, 0, 2e-4, heldPastOnsetMax, 200);      /* open lid: O2 stays at 20.9 % */
+    CHECK(T, C.state == SG_OPEN_STOP && td == 34 &&
+             alarmIs(SG_A_OPENSTOP, 2, "no O2 decay within 30 s of full flow: enclosure open?"),
+          "open lid: state %d at t %ld (want OPEN_STOP at 34, the first update after el 30)", C.state, td);
+    td = lidRun(0, 0, 2e-4, heldNone, 200);              /* and at 1 Hz, at el 30 as before */
+    CHECK(T, C.state == SG_OPEN_STOP && td == 33, "open lid, 1 Hz: state %d at t %ld", C.state, td);
+    return 0;
+}
+
+/* M2 (spec §8.9 step 5.3): a repeated onset sample is left out of the fit. The purge timer starts
+   30 s after the entry (the flow stays below 95 %), and the analyzer misses its updates from
+   t = 26 to 35, so the onset is first seen at t = 32 (timer start) on the t = 25 reading: a
+   sample ~7 s old placed at t = 0. Kept, it bent the decay (curvature well below 0.8, closed lid
+   judged open, as in the stress harness's sc13); left out, the fit sees the exact decay. */
+static int heldAtTimerStart(long t) { return t >= 26 && t <= 35; }
+static int t_onset_sample_stale(void)
+{
+    const char *T = "M2 repeated onset sample left out of the lid fit";
+    sg_inputs in = base(20.9);
+    double prev = 20.9;
+    long t;
+    newCtl();
+    in.flow = 10; in.sp = 20;                            /* below 0.95 x purgeFlow: 30 s timer */
+    tickAt(&in, 1); sg_op_purge(&C); tickAt(&in, 2);
+    for (t = 3; t <= 200 && !C.sd.dropChecked && C.state == SG_PURGE; t++) {
+        double v = 20.9 * exp(-KEXP * (double)(t - 3));
+        if (heldAtTimerStart(t)) v = prev;
+        prev = v; in.o2 = v;
+        tickAt(&in, (double)t);
+    }
+    CHECK(T, C.state == SG_PURGE && C.sd.lidResult == SG_LID_PASSED,
+          "closed lid judged open: state %d, '%s'", C.state, C.alarms[SG_A_OPENSTOP].msg);
+    CHECK(T, C.sd.onsetT == 0 && C.sd.timerT0 == 32, "onset el %g timerT0 %g (want 0, 32)",
+          C.sd.onsetT, C.sd.timerT0);
+    CHECK(T, fabs(C.sd.kin - 1) < 1e-9 && fabs(C.sd.curv - 1) < 1e-9,
+          "ratio %.12f curvature %.12f (want 1, 1)", C.sd.kin, C.sd.curv);
+    return 0;
+}
+
+/* M3 (spec §8.14 Pinned and the minimum-flow note): epid's output deadband ODEL (0.01) can leave
+   OVAL just inside the drive limit for good (the stress harness's sc07: OVAL 0.9936 against
+   DRVH 1.0 while the PID asked for 1.0). The pinned tests allow ODEL: OVAL ≥ DRVH − max(ODEL,
+   1e-6) and OVAL ≤ DRVL + max(ODEL, 1e-6). Coordinator approval 2026-10-01 under the user's rule
+   that "can't act" must be loud. */
+static int t_pinned_odel(void)
+{
+    const char *T = "M3 pinned within ODEL of the drive limit";
+    const char *MSG = "PID pinned at max flow: check enclosure seal";
+    const char *NOTE = "note: PID at minimum flow and O2 still below target";
+    sg_inputs in = base(0.99);
+    double t;
+    newCtl();
+    C.p.pinnedTime = 5;
+    CHECK(T, regulateAtTarget(&in, 0.994) == 1 && !C.settling, "resume at target failed");
+    CHECK(T, C.epid.DRVH == 1.0 && C.epid.OVAL == 0.994 && C.epid.ODEL == 0.01, "DRVH %g OVAL %g ODEL %g",
+          C.epid.DRVH, C.epid.OVAL, C.epid.ODEL);
+    for (t = 2; t <= 5; t++) tickO2(&in, 0.99, t);
+    CHECK(T, !C.alarms[SG_A_PINNED].active, "Pinned before pinnedTime");
+    tickO2(&in, 0.99, 6);
+    CHECK(T, alarmIs(SG_A_PINNED, 2, MSG) && logTime(MSG) == 6, "Pinned not raised at pinnedTime");
+    /* 0.015 below DRVH (more than ODEL): not pinned */
+    newCtl();
+    C.p.pinnedTime = 5;
+    CHECK(T, regulateAtTarget(&in, 0.985) == 1, "resume (0.985) failed");
+    for (t = 2; t <= 20; t++) tickO2(&in, 0.99, t);
+    CHECK(T, !C.alarms[SG_A_PINNED].active, "Pinned at DRVH - 0.015");
+    /* the minimum-flow note, within ODEL of DRVL (0.05) */
+    newCtl();
+    C.p.pinnedTime = 5;
+    CHECK(T, regulateAtTarget(&in, 0.056) == 1, "resume (0.056) failed");
+    for (t = 2; t <= 6; t++) tickO2(&in, 0.5, t);
+    CHECK(T, countLog(0, NOTE) == 1 && logTime(NOTE) == 6, "minimum-flow note at DRVL + 0.006: %d",
+          countLog(0, NOTE));
+    return 0;
+}
+
+/* M4 (spec §8.2 step 6, §8.6): aboveCount counts fresh readings only. One spurious 15 % reading
+   in REGULATE, held over 4 missed updates, reached lidFilter 5 and stopped a closed lid (its 10 s
+   rise, 1.4 %/s, is far above lidSlope); 0-3 held ticks did not. Now no hold length stops it,
+   up to frozenTime. */
+static int t_above_fresh(void)
+{
+    const char *T = "M4 lid detector counts fresh readings only";
+    int held;
+    for (held = 0; held <= 25; held++) {
+        sg_inputs in = base(0.99);
+        double t;
+        newCtl();
+        CHECK(T, regulateAtTarget(&in, 0.3) == 1, "resume failed");
+        for (t = 2; t <= 160; t++) {
+            double v = 0.99 + wob(t);
+            if (t >= 100 && t <= 100 + held) v = 15.0;    /* the glitch, then held */
+            in.o2 = v; tickAt(&in, t);
+        }
+        CHECK(T, C.state == SG_REGULATE, "glitch held %d ticks: state %d (%s)", held, C.state,
+              C.alarms[SG_A_OPENSTOP].msg);
+    }
+    return 0;
+}
+
+/* M5: a real lid lift (O2 rising 1.5 %/s in REGULATE, crossing lidLevel 10 % at t = 106.0) with
+   15 % of the O2 updates missed at random still trips, at the lidFilter-th fresh reading above
+   10 %: each missed update before it delays the trip by 1 s, nothing else does. Without misses
+   the trip is at t = 111 (readings 107..111). The draw below (seed 1) misses 2 such updates:
+   within lidFilter + 2 s of the crossing, as the coordinator asked; all 500 draws trip. */
+static unsigned int lcg(unsigned int *s) { *s = *s * 1103515245u + 12345u; return (*s >> 8) & 0xffffu; }
+static long liftRun(unsigned int seed, double missFrac, int *missesBefore)
+{
+    sg_inputs in = base(0.99);
+    double prev = 0.99, t;
+    unsigned int s = seed;
+    newCtl();
+    if (regulateAtTarget(&in, 0.3) != 1) return -2;
+    *missesBefore = 0;
+    for (t = 2; t <= 200; t++) {
+        double v = (t < 100 ? 0.99 : fmin(20.9, 0.99 + 1.5 * (t - 100))) + wob(t);
+        int miss = t >= 100 && lcg(&s) < missFrac * 65536;
+        if (miss) v = prev;
+        if (miss && t >= 107) (*missesBefore)++;     /* where a fresh reading is above 10 % */
+        prev = v; in.o2 = v; tickAt(&in, t);
+        if (C.state == SG_OPEN_STOP) return (long)t;
+    }
+    return -1;
+}
+static int t_lift_with_misses(void)
+{
+    const char *T = "M5 lid lift with 15 % missed O2 updates";
+    int m, worst = 0;
+    unsigned int seed;
+    long td = liftRun(1, 0, &m);
+    CHECK(T, td == 111 && m == 0, "no misses: tripped at t %ld (want 111)", td);
+    CHECK(T, strstr(C.alarms[SG_A_OPENSTOP].msg, "enclosure opened, flow stopped") != NULL,
+          "not the lid detector: '%s'", C.alarms[SG_A_OPENSTOP].msg);
+    td = liftRun(1, 0.15, &m);
+    CHECK(T, td > 0 && td <= 106 + 5 + 2, "seed 1: tripped at t %ld (want <= 113, %d misses)", td, m);
+    for (seed = 1; seed <= 500; seed++) {
+        td = liftRun(seed, 0.15, &m);
+        CHECK(T, td == 111 + m, "seed %u: tripped at t %ld, want 111 + %d missed updates", seed, td, m);
+        if (m > worst) worst = m;
+    }
+    CHECK(T, worst >= 3, "the draws never miss 3 updates in the window (%d): weak test", worst);
+    return 0;
+}
+
 int main(void)
 {
     static int (*const tests[])(void) = {
+        t_onset_fresh, t_onset_sample_stale, t_pinned_odel, t_above_fresh, t_lift_with_misses,
         t_resume_idle, t_resume_idle_high, t_resume_invalid, t_resume_purge, t_set_mode,
         t_mark_new_run, t_mfc_disconnect, t_mfc_blip, t_resume_mfc, t_forecast_text, t_progress_text,
         t_no_decay, t_drop_skip_level,

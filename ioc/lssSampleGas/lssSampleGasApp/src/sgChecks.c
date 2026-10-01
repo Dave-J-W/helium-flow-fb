@@ -149,12 +149,18 @@ void sg_alarm_checks(sg_ctl *c)
         snprintf(b1, sizeof b1, "flow ≤ %s× expected: wrong enclosure mode selected?",
                  sg_fmtJs(n1, sizeof n1, p->flowLowX));
         sg_debounce(c, SG_A_FLOWLOW, level, b1, "", p->flowAlarmDelay);
-        if (c->epid.OVAL >= c->epid.DRVH - 1e-6) c->pinnedSec++; else c->pinnedSec = 0;
+        /* within epid's output deadband of the limit counts as at it: with ODEL 0.01, OVAL can
+           stay just inside DRVH for good while the PID asks for DRVH (stress harness, sc07:
+           0.9936 against 1.0), and Pinned was never raised (coordinator approval 2026-10-01,
+           the user's rule that "can't act" must be loud) */
+        if (c->epid.OVAL >= c->epid.DRVH - sg_jmax(c->epid.ODEL, 1e-6)) c->pinnedSec++;
+        else c->pinnedSec = 0;
         if (settled && c->pinnedSec >= p->pinnedTime)
             sg_set_alarm(c, SG_A_PINNED, 2, "PID pinned at max flow: check enclosure seal");
         else sg_clear_alarm(c, SG_A_PINNED, 0);
         /* pinned at minimum flow while O2 stays below target: logged once, no alarm */
-        if (c->epid.OVAL <= c->epid.DRVL + 1e-6 && c->o2ok && c->o2 < p->target - p->tol)
+        if (c->epid.OVAL <= c->epid.DRVL + sg_jmax(c->epid.ODEL, 1e-6) && c->o2ok &&
+            c->o2 < p->target - p->tol)
             c->pinnedLowSec++;
         else c->pinnedLowSec = 0;
         if (settled && (double)c->pinnedLowSec == p->pinnedTime)

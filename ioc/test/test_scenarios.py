@@ -3,6 +3,8 @@ plant simulator (Plan 4 task 2). One test method per scenario (test_sc01 .. test
 
     SG_SCENARIOS=2,3,8 python -m unittest -v test_scenarios      (default: every real-time one)
     SG_NOISE=0 turns the plant noise off (default on, seeded with the scenario number)
+    SG_O2_DROP=0.15 / SG_O2_JITTER=0.3 make the plant's O2 PV miss / delay its updates
+        (plant_sim --o2-drop / --o2-jitter, seeded with the scenario number; 2026-10-01)
 
 Each run writes results/sc<NN>-<timestamp>.json (end state, log lines, trace, pass/fail,
 problems) before it asserts, so an unattended run loses nothing. Scenarios 17 and 19 are
@@ -94,15 +96,17 @@ def extra_checks(sc, res):
     return probs
 
 
-def run_scenario(n, noise=True):
+def run_scenario(n, noise=True, o2_drop=0.0, o2_jitter=0.0):
     sc = BY_N[n]
     res = {'n': n, 'name': sc['name'], 'dur': sc['dur'], 'noise': noise, 'seed': n, 'events': [],
-           'trace': [], 'problems': [], 'expected_state': sc['state'], 'has': sc['has']}
+           'trace': [], 'problems': [], 'expected_state': sc['state'], 'has': sc['has'],
+           'o2_drop': o2_drop, 'o2_jitter': o2_jitter}
     stamp = time.strftime('%Y%m%d-%H%M%S')
-    path = RESULTS / f'sc{n:02d}-{stamp}.json'
+    o2tag = (f'-drop{o2_drop:g}' if o2_drop else '') + (f'-jit{o2_jitter:g}' if o2_jitter else '')
+    path = RESULTS / f'sc{n:02d}{o2tag}-{stamp}.json'
     res['started'] = stamp
     try:
-        with Bench(noise=noise, seed=n, tag=f'sc{n:02d}') as b:
+        with Bench(noise=noise, seed=n, tag=f'sc{n:02d}{o2tag}', o2_drop=o2_drop, o2_jitter=o2_jitter) as b:
             for action, arg in sc['setup']:
                 res['events'].append({'t': 'setup', 'action': action, 'arg': arg, 'note': apply(b, action, arg)})
             t0 = b.next_tick()
@@ -127,6 +131,7 @@ def run_scenario(n, noise=True):
                     break
                 time.sleep(0.2)
             res['end_state'] = b.state()
+            res['o2_skipped'] = b.get(WORLD + 'O2Skipped')
             res['banner'] = b.get(P + 'Sts:Banner.VAL$', as_string=True)   # long string (> 40 chars)
             res['log'] = b.log_lines(since=mark)
             full = b.log_lines()
@@ -170,7 +175,9 @@ def _make(n):
             self.skipTest('replay only (spec §14.4)')
         if n not in selected():
             self.skipTest('not selected by SG_SCENARIOS')
-        res = run_scenario(n, noise=os.environ.get('SG_NOISE', '1') != '0')
+        res = run_scenario(n, noise=os.environ.get('SG_NOISE', '1') != '0',
+                           o2_drop=float(os.environ.get('SG_O2_DROP', '0') or 0),
+                           o2_jitter=float(os.environ.get('SG_O2_JITTER', '0') or 0))
         print(f"\nsc{n:02d}: {'PASS' if res['pass'] else 'FAIL'} end={res.get('end_state')} "
               f"problems={res['problems']} -> {res['path']}", flush=True)
         self.assertTrue(res['pass'], res['problems'])

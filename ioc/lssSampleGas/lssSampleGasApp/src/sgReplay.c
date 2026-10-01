@@ -12,7 +12,29 @@
    core's own output, and for scenario 19 also the spec §8.17 check Dispensed = Σ runs (1 L).
 
    --time-offset S adds S (a multiple of 3600 s) to every time in the traces, so the core runs on
-   epoch-like times (the IOC's `now`) while the reference ran from t = 0. */
+   epoch-like times (the IOC's `now`) while the reference ran from t = 0.
+
+   Stress mode (missed O2 updates; the user, 2026-10-01: "building our system to handle missed
+   updates on a ~1Hz schedule is good for robustness"). Any of --o2-drop, --hold, --hold-on or
+   --events switches the replay from comparing against the trace to reporting the core's own
+   decisions, so a clean run and a perturbed run of the same code can be compared
+   (ioc/test/stress_o2.py). A dropped tick repeats the previous tick's O2 value and severity, as a
+   missed CA monitor update does in the glue (sgIoc.c buildInputs: the last received value).
+     --o2-drop F        drop each tick's O2 update with probability F (seeded; --seed N)
+     --burst N          each drop lasts N consecutive ticks (the start probability is set so the
+                        dropped fraction stays about F)
+     --hold T:K         hold the O2 for K s from trace time T (repeatable)
+     --hold-on S:OFF:K  hold the O2 for K s from OFF s after every entry into state S
+     --o2-period N      a slow O2 PV: a new value only every N ticks (random phase), drops on top
+     --events           (implied by the above) print the decisions only
+   Output, tab-separated: "E tag t kind name sev text" for every state transition (STATE, name
+   FROM>TO, text = reason), alarm raise or level change (ALARM), alarm clear (CLEAR) and log line
+   of severity >= 1 or of the lid check, settling and minimum-flow notes (LOG); then one line
+   "S tag finalState heliumL drops ticks selftest" per trace, heliumL = the commanded flow
+   integrated over the ticks outside IDLE (lastCmd, L). --dump T0:T1 also prints the core's O2
+   state per tick (D lines). In stress mode writeEnabled is 0: the setpoint-follow
+   check compares the controller's commands with the recorded Setpoint_RBV, which does not respond
+   to a perturbed controller (an artefact of the open-loop replay, not a decision). */
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -84,6 +106,118 @@ static long nDiffs;
 static long maxDiffs = 10;
 static double timeOffset;          /* --time-offset */
 
+/* ------------------------------------------------------------------ stress mode state */
+static int stress;                 /* report decisions instead of comparing with the trace */
+static double dropFrac;            /* --o2-drop */
+static int burstN = 1;             /* --burst */
+static int periodN = 1, periodPhase;   /* --o2-period: a fresh value only every periodN ticks */
+static double dumpT0 = 1, dumpT1 = 0;  /* --dump T0:T1: the core's O2 state per tick (debugging) */
+static unsigned long long rng, rngSeed;   /* --seed; reseeded per trace, so a trace's draws do
+                                             not depend on the other traces on the command line */
+#define MAXHOLD 64
+static struct { double t, k; } holdAbs[MAXHOLD];
+static int nHoldAbs;
+static struct { int state; double off, k; } holdOn[MAXHOLD];
+static int nHoldOn;
+static struct { double t0, t1; } holdPend[MAXHOLD];      /* scheduled from --hold-on */
+static int nHoldPend;
+static double lastIT;              /* time of the last I line (NaN: none yet) */
+static int curDropped, burstLeft, havePres, presSevr;
+static double presO2;              /* the O2 value and severity the core was last given */
+static long nDrops, nTicks;
+static double heliumL;
+static int prevActive[SG_NALARMS], prevSev[SG_NALARMS];
+static const char *const ALARM_NAMES[SG_NALARMS] = {
+    "OpenStop", "PurgeIncomplete", "O2Bad", "OpenLoop", "Override", "HoldStuck", "Mismatch",
+    "FlowHigh", "FlowLow", "Pinned", "O2High", "NotReached", "CylLow", "Gas", "Units", "Shadow",
+    "PinnedLow"
+};
+
+static double urand(void)           /* splitmix64, [0, 1) */
+{
+    unsigned long long z = (rng += 0x9E3779B97F4A7C15ULL);
+    z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;
+    z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL;
+    z ^= z >> 31;
+    return (double)(z >> 11) / 9007199254740992.0;
+}
+
+static double lineT;               /* trace time of the current C or T line */
+static double relT(void) { return lineT; }
+
+static void stressLog(int sev, const char *msg)
+{
+    int s;
+    /* "<prev> → <STATE> (<reason>)": a transition (sgCore.c sg_enter) */
+    for (s = -1; s < SG_NSTATES; s++) {
+        const char *nm = s < 0 ? "—" : sg_state_names[s];
+        size_t l = strlen(nm);
+        if (strncmp(msg, nm, l) == 0 && strncmp(msg + l, " → ", strlen(" → ")) == 0) {
+            const char *to = msg + l + strlen(" → "), *paren = strstr(to, " (");
+            char toName[32], reason[MSG_LEN];
+            size_t tl = paren ? (size_t)(paren - to) : strlen(to);
+            if (tl >= sizeof toName) tl = sizeof toName - 1;
+            memcpy(toName, to, tl); toName[tl] = '\0';
+            snprintf(reason, sizeof reason, "%s", paren ? paren + 2 : "");
+            if (reason[0] && reason[strlen(reason) - 1] == ')') reason[strlen(reason) - 1] = '\0';
+            printf("E\t%s\t%.0f\tSTATE\t%s>%s\t0\t%s\n", tag, relT(), nm, toName, reason);
+            {
+                int k, st = -1;
+                for (k = 0; k < SG_NSTATES; k++) if (strcmp(toName, sg_state_names[k]) == 0) st = k;
+                for (k = 0; k < nHoldOn && nHoldPend < MAXHOLD; k++)
+                    if (holdOn[k].state == st) {
+                        holdPend[nHoldPend].t0 = relT() + holdOn[k].off;
+                        holdPend[nHoldPend].t1 = relT() + holdOn[k].off + holdOn[k].k;
+                        nHoldPend++;
+                    }
+            }
+            return;
+        }
+    }
+    if (sev >= 1 || strncmp(msg, "lid check", 9) == 0 || strncmp(msg, "settled", 7) == 0 ||
+        strncmp(msg, "settling stalled", 16) == 0 || strncmp(msg, "note:", 5) == 0)
+        printf("E\t%s\t%.0f\tLOG\t-\t%d\t%s\n", tag, relT(), sev, msg);
+}
+
+/* after every executable line: alarm raises, level changes and clears */
+static void stressAlarms(void)
+{
+    int k;
+    if (!stress || down) return;
+    for (k = 0; k < SG_NALARMS; k++) {
+        const sg_alarm_slot *a = &ctl.alarms[k];
+        if (a->active && (!prevActive[k] || a->sev != prevSev[k]))
+            printf("E\t%s\t%.0f\tALARM\t%s\t%d\t%s\n", tag, relT(), ALARM_NAMES[k], a->sev, a->msg);
+        else if (!a->active && prevActive[k])
+            printf("E\t%s\t%.0f\tCLEAR\t%s\t%d\t-\n", tag, relT(), ALARM_NAMES[k], prevSev[k]);
+        prevActive[k] = a->active; prevSev[k] = a->active ? a->sev : 0;
+    }
+}
+
+/* the drop decision, once per tick time (a trace repeats the I line after an operator call) */
+static void stressInputs(double t, sg_inputs *in)
+{
+    if (!(t == lastIT)) {
+        int i, held = 0;
+        for (i = 0; i < nHoldAbs; i++) if (t >= holdAbs[i].t && t < holdAbs[i].t + holdAbs[i].k) held = 1;
+        for (i = 0; i < nHoldPend; i++) if (t >= holdPend[i].t0 && t < holdPend[i].t1) held = 1;
+        curDropped = 0;
+        if (periodN > 1 && ((long)nTicks + periodPhase) % periodN != 0) curDropped = 1;
+        else if (held) curDropped = 1;
+        else if (burstLeft > 0) { curDropped = 1; burstLeft--; }
+        else if (dropFrac > 0) {
+            double p = dropFrac / (burstN * (1 - dropFrac) + dropFrac);
+            if (urand() < p) { curDropped = 1; burstLeft = burstN - 1; }
+        }
+        if (!havePres) curDropped = 0;
+        if (curDropped) nDrops++;
+        nTicks++;
+        lastIT = t;
+    }
+    if (curDropped) { in->o2 = presO2; in->o2Sevr = presSevr; }
+    else { presO2 = in->o2; presSevr = in->o2Sevr; havePres = 1; }
+}
+
 static const st_row *row;          /* SELFTEST row of the current trace, or NULL */
 static char alt[MAXHAS][MAXALT][128];
 static int nAlt[MAXHAS], hasFound[MAXHAS];
@@ -129,7 +263,9 @@ static void selftestSee(const char *msg)
 
 static void pushLog(int sev, const char *msg)
 {
-    rec *r = pushRec();
+    rec *r;
+    if (stress) { stressLog(sev, msg); selftestSee(msg); return; }
+    r = pushRec();
     r->kind = 'L'; r->sev = sev;
     snprintf(r->msg, sizeof r->msg, "%s", msg);
     selftestSee(msg);
@@ -138,7 +274,9 @@ static void pushLog(int sev, const char *msg)
 static void ioLog(void *ctx, double t, int sev, const char *msg) { (void)ctx; (void)t; pushLog(sev, msg); }
 static void ioPut(const char *key, double v)
 {
-    rec *r = pushRec();
+    rec *r;
+    if (stress) return;
+    r = pushRec();
     r->kind = 'A'; r->v = v;
     snprintf(r->key, sizeof r->key, "%s", key);
 }
@@ -428,6 +566,10 @@ static void doI(char *rest)
     in.mfcConnected = 1;
     in.writeEnabled = 1;                /* the reference always writes: the spec §8.14 setpoint-
                                            follow check runs, and must never come on */
+    if (stress) {
+        in.writeEnabled = 0;            /* see the stress-mode note at the top */
+        stressInputs(num(tok[0]), &in);
+    }
     sg_set_inputs(&ctl, &in);
 }
 
@@ -438,6 +580,7 @@ static void doC(long line, char *rest)
     double t;
     splitTokens(rest, tok, 2);          /* t name | arg */
     t = num(tok[0]) + timeOffset; name = tok[1]; arg = tok[2];
+    lineT = t - timeOffset;
     if (strcmp(name, "restart") == 0) {
         down = 0;
         sg_restart(&ctl, t);
@@ -471,7 +614,16 @@ static int followMax, followMaxAll, followJudged;
 static void doT(char *rest)
 {
     if (down) return;
+    lineT = num(rest);
     sg_tick(&ctl, num(rest) + timeOffset);
+    /* the controller's helium: not in IDLE, where it does not own the flow */
+    if (isfinite(ctl.lastCmd) && ctl.state != SG_IDLE) heliumL += ctl.lastCmd / 60;
+    if (stress && lineT >= dumpT0 && lineT <= dumpT1)
+        printf("D\t%s\t%.0f\t%s\to2 %.6f sevr %d same %d ok %d nAvg %d CVAL %.6f OVAL %.6f lastCmd %.6f "
+               "pinned %d settling %d stall %d slope %.5f steady %d above %d maxRate %.4f\n", tag,
+               lineT, coreStateName(), ctl.in.o2, ctl.in.o2Sevr, ctl.sameCount, ctl.o2ok, ctl.nAvg,
+               ctl.epid.CVAL, ctl.epid.OVAL, ctl.lastCmd, ctl.pinnedSec, ctl.settling, ctl.stallSec,
+               ctl.o2Slope, ctl.flowSteady, ctl.aboveCount, ctl.maxRate);
     if (ctl.followSec > followMax) followMax = ctl.followSec;
     if (ctl.in.writeEnabled && ctl.state != SG_IDLE && ctl.in.running && isfinite(ctl.lastCmd))
         followJudged++;
@@ -497,7 +649,9 @@ static void doP(char *rest)
             outlStarts++;
             if (!numEq(cfg.OUTL, spVal, 1e-9)) outlDiffers++;
         }
-        oval = sg_epid_sim_process(&esim, &cfg, cfg.FBON, t, ctl.p.pidScan, spVal);
+        /* stress mode: the IOC's start (OUTL = lastCmd, sgCore.h): the trace's Setpoint VAL is the
+           reference's last put, which a perturbed core need not have made */
+        oval = sg_epid_sim_process(&esim, &cfg, cfg.FBON, t, ctl.p.pidScan, stress ? cfg.OUTL : spVal);
         sg_pid_done(&ctl, oval);
     }
 }
@@ -600,6 +754,12 @@ static int replayTrace(const char *path, long *diffsOut)
     sg_epid_sim_reset(&esim);
     fHead = fCount = 0;                 /* drop sg_init's own "IOC started" line */
     down = 0; nDiffs = 0; outlStarts = 0; outlDiffers = 0; followMax = 0;
+    lastIT = NAN; curDropped = 0; burstLeft = 0; havePres = 0; presO2 = NAN; presSevr = 3;
+    nDrops = 0; nTicks = 0; heliumL = 0; nHoldPend = 0; lineT = 0;
+    rng = 0x9E3779B97F4A7C15ULL ^ (rngSeed * 0xD1B54A32D192ED03ULL)
+          ^ ((unsigned long long)(scenarioNumber(path) + 1000) * 0x2545F4914F6CDD1DULL);
+    periodPhase = periodN > 1 ? (int)(urand() * periodN) : 0;
+    memset(prevActive, 0, sizeof prevActive); memset(prevSev, 0, sizeof prevSev);
     selftestSetup(scenarioNumber(path));
 
     while (fgets(line, sizeof line, f)) {
@@ -611,22 +771,29 @@ static int replayTrace(const char *path, long *diffsOut)
         type = line[0];
         rest = (len > 2 && line[1] == ' ') ? line + 2 : line + len;
         switch (type) {
-        case 'L': doL(ln, rest); break;
-        case 'A': doA(ln, rest); break;
-        case 'X': doX(ln, rest); break;
-        case 'H': doH(ln, rest); break;
-        case 'R': flushExtra(ln); doR(); break;
+        case 'L': if (!stress) doL(ln, rest); break;     /* stress mode: the trace's outputs */
+        case 'A': if (!stress) doA(ln, rest); break;     /* are not the perturbed core's */
+        case 'X': if (!stress) doX(ln, rest); break;
+        case 'H': if (!stress) doH(ln, rest); break;
+        case 'R': flushExtra(ln); doR(); stressAlarms(); break;
         case 'S': flushExtra(ln); doS(ln, rest); break;
         case 'I': flushExtra(ln); doI(rest); break;
-        case 'C': flushExtra(ln); doC(ln, rest); break;
-        case 'T': flushExtra(ln); doT(rest); break;
-        case 'P': flushExtra(ln); doP(rest); break;
+        case 'C': flushExtra(ln); doC(ln, rest); stressAlarms(); break;
+        case 'T': flushExtra(ln); doT(rest); stressAlarms(); break;
+        case 'P': flushExtra(ln); doP(rest); stressAlarms(); break;
         default: report(ln, "unknown line type", "", line); break;
         }
     }
     fclose(f);
     flushExtra(ln + 1);
 
+    if (stress) {
+        stOk = selftestEval(probs, sizeof probs);
+        printf("S\t%s\t%s\t%.6f\t%ld\t%ld\t%s\n", tag, coreStateName(), heliumL, nDrops, nTicks,
+               stOk ? "pass" : probs);
+        *diffsOut = 0;
+        return 1;
+    }
     stOk = selftestEval(probs, sizeof probs);
     if (!stOk) printf("%s: selftest: %s\n", tag, probs);
     if (outlDiffers)
@@ -664,15 +831,68 @@ static int parseIgnore(const char *list)
 
 static void usage(void)
 {
-    fprintf(stderr, "usage: sgReplay [--max-diffs N] [--ignore field,...] [--time-offset S] trace...\n");
+    fprintf(stderr, "usage: sgReplay [--max-diffs N] [--ignore field,...] [--time-offset S] trace...\n"
+                    "       sgReplay [--o2-drop F] [--burst N] [--o2-period N] [--seed N] [--hold T:K]... "
+                    "[--hold-on STATE:OFF:K]... [--events] trace...\n");
+}
+
+static int stateIndex(const char *s)
+{
+    int k;
+    for (k = 0; k < SG_NSTATES; k++) if (strcmp(s, sg_state_names[k]) == 0) return k;
+    return -1;
+}
+
+/* the stress-mode options; returns 0 if argv[i] is not one, -1 on a bad value, else the number
+   of arguments used */
+static int stressOption(int i, int argc, char **argv)
+{
+    const char *a = argv[i], *v = i + 1 < argc ? argv[i + 1] : NULL;
+    if (strcmp(a, "--events") == 0) { stress = 1; return 1; }
+    if (!v) return 0;
+    if (strcmp(a, "--o2-drop") == 0) {
+        dropFrac = atof(v); stress = 1;
+        return (dropFrac >= 0 && dropFrac < 1) ? 2 : -1;
+    }
+    if (strcmp(a, "--burst") == 0) { burstN = atoi(v); return burstN >= 1 ? 2 : -1; }
+    if (strcmp(a, "--o2-period") == 0) { periodN = atoi(v); stress = 1; return periodN >= 1 ? 2 : -1; }
+    if (strcmp(a, "--dump") == 0) {
+        stress = 1;
+        return sscanf(v, "%lf:%lf", &dumpT0, &dumpT1) == 2 ? 2 : -1;
+    }
+    if (strcmp(a, "--seed") == 0) {
+        unsigned long long s = strtoull(v, NULL, 10);
+        rngSeed = s;
+        return 2;
+    }
+    if (strcmp(a, "--hold") == 0) {
+        if (nHoldAbs >= MAXHOLD || sscanf(v, "%lf:%lf", &holdAbs[nHoldAbs].t, &holdAbs[nHoldAbs].k) != 2)
+            return -1;
+        nHoldAbs++; stress = 1;
+        return 2;
+    }
+    if (strcmp(a, "--hold-on") == 0) {
+        char st[32];
+        if (nHoldOn >= MAXHOLD ||
+            sscanf(v, "%31[^:]:%lf:%lf", st, &holdOn[nHoldOn].off, &holdOn[nHoldOn].k) != 3 ||
+            (holdOn[nHoldOn].state = stateIndex(st)) < 0)
+            return -1;
+        nHoldOn++; stress = 1;
+        return 2;
+    }
+    return 0;
 }
 
 int main(int argc, char **argv)
 {
-    int i, nTraces = 0, nPass = 0;
+    int i, nTraces = 0, nPass = 0, used;
     long total = 0;
     for (i = 1; i < argc; i++) {            /* options first, wherever they appear */
-        if (strcmp(argv[i], "--max-diffs") == 0 && i + 1 < argc) maxDiffs = atol(argv[++i]);
+        if ((used = stressOption(i, argc, argv)) != 0) {
+            if (used < 0) { fprintf(stderr, "sgReplay: bad value for %s\n", argv[i]); return 2; }
+            i += used - 1;
+        }
+        else if (strcmp(argv[i], "--max-diffs") == 0 && i + 1 < argc) maxDiffs = atol(argv[++i]);
         else if (strcmp(argv[i], "--ignore") == 0 && i + 1 < argc) { if (!parseIgnore(argv[++i])) return 2; }
         else if (strcmp(argv[i], "--time-offset") == 0 && i + 1 < argc) {
             char *end;
@@ -690,12 +910,18 @@ int main(int argc, char **argv)
     if (timeOffset != 0) printf("sgReplay: all times shifted by %.0f s\n", timeOffset);
     for (i = 1; i < argc; i++) {
         long d = 0;
+        if (strcmp(argv[i], "--events") == 0) continue;           /* parsed above */
+        if (strcmp(argv[i], "--o2-drop") == 0 || strcmp(argv[i], "--burst") == 0 ||
+            strcmp(argv[i], "--o2-period") == 0 || strcmp(argv[i], "--dump") == 0 ||
+            strcmp(argv[i], "--seed") == 0 || strcmp(argv[i], "--hold") == 0 ||
+            strcmp(argv[i], "--hold-on") == 0) { i++; continue; }
         if (strcmp(argv[i], "--max-diffs") == 0 || strcmp(argv[i], "--ignore") == 0 ||
             strcmp(argv[i], "--time-offset") == 0) { i++; continue; }
         nPass += replayTrace(argv[i], &d);
         total += d;
         fflush(stdout);
     }
+    if (stress) return 0;
     printf("sgReplay: %ld bumpless PID starts, cfg.OUTL != Setpoint VAL at %ld\n", outlStartsAll,
            outlDiffersAll);
     printf("sgReplay: setpoint-follow check judged %d ticks; longest run of Setpoint_RBV off "
