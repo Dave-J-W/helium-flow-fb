@@ -362,6 +362,21 @@ _add("Diag:HandoffPhase", "bi", {"ZNAM": "settle", "ONAM": "delay"}, tag="diag")
 _add("Diag:OverrideCount", "longin", {}, tag="diag", autosave="settings")
 _add("Diag:OverrideLog", "lsi", {"SIZV": 4096}, tag="diag",
      desc="Last 20 overrides, newest first")
+# O2 update-rate diagnostic (user's request, 2026-10-01): how reliably the O2 channel's CA time
+# stamp delivers a new reading to the 1 Hz tick. Pure observation (no alarms, no effect on any
+# decision); not autosaved -- restarts from zero, which is fine (spec 7.6).
+_add("Diag:O2Fresh10m", "ai", {"EGU": "%", "PREC": "1"}, tag="diag",
+     desc="O2 fresh-tick pct, 10 min")
+_add("Diag:O2Fresh24h", "ai", {"EGU": "%", "PREC": "2"}, tag="diag",
+     desc="O2 fresh-tick pct, 24 h")
+_add("Diag:O2MaxGap10m", "ai", {"EGU": "s", "PREC": "1"}, tag="diag",
+     desc="Longest O2 update gap, 10 min")
+_add("Diag:O2MaxGap24h", "ai", {"EGU": "s", "PREC": "1"}, tag="diag",
+     desc="Longest O2 update gap, 24 h")
+_add("Diag:O2Interval", "ai", {"EGU": "s", "PREC": "2"}, tag="diag",
+     desc="Latest O2 update interval")
+_add("Diag:O2Ticks10m", "longin", {}, tag="diag", desc="Ticks counted, 10 min window")
+_add("Diag:O2Disconn10m", "longin", {}, tag="diag", desc="O2 disconnected ticks, 10 min")
 _add("Log:Text", "waveform", {"FTVL": "CHAR", "NELM": 16384}, tag="diag",
      desc="Event log, newest first")
 

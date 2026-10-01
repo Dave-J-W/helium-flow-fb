@@ -32,3 +32,11 @@
 15IDC:SampleGas:Cfg:Active:O2  1  MONITOR
 15IDC:SampleGas:Cfg:Active:CYL  1  MONITOR
 15IDC:SampleGas:Cfg:Active:STN  1  MONITOR
+# 15IDC sample gas: O2 update diagnostics, 1 s
+15IDC:SampleGas:Diag:O2Fresh10m  1  SCAN
+15IDC:SampleGas:Diag:O2Fresh24h  1  SCAN
+15IDC:SampleGas:Diag:O2MaxGap10m  1  SCAN
+15IDC:SampleGas:Diag:O2MaxGap24h  1  SCAN
+15IDC:SampleGas:Diag:O2Interval  1  SCAN
+15IDC:SampleGas:Diag:O2Ticks10m  1  SCAN
+15IDC:SampleGas:Diag:O2Disconn10m  1  SCAN

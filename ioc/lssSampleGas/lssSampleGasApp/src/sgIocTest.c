@@ -17,6 +17,7 @@
 #include "sgCore.h"
 #include "sgIoc.h"
 #include "sgFmt.h"
+#include "sgO2Diag.h"
 
 /* ---------------------------------------------------------------- effect capture (as sgUnitTest.c) */
 #define MAXLOG 512
@@ -890,6 +891,142 @@ static int t_report_text(void)
     return 0;
 }
 
+/* ================================================================ O2 update diagnostic
+   (sgO2Diag.h, user's request 2026-10-01). Pure observation: no alarms, no core/replay effect. */
+
+static int t_o2diag_2hz(void)
+{
+    const char *T = "O1 O2 at 2 Hz: every 1 Hz tick sees a new reading, 100% fresh, ~0.5 s gap";
+    sg_o2diag d; sg_o2diag_report r;
+    int i;
+    sg_o2diag_init(&d);
+    /* the O2 IOC updates every 0.5 s; each 1 Hz tick's time stamp is 0.5 s newer than the last
+       tick's, whichever tick phase it lands on */
+    for (i = 1; i <= 600; i++) {
+        unsigned sec = (unsigned)(i / 2);
+        unsigned nsec = (i % 2) ? 500000000u : 0u;
+        sg_o2diag_tick(&d, (double)i, 1, sec, nsec);
+    }
+    sg_o2diag_get(&d, &r);
+    CHECK(T, r.ticks10m == 600, "ticks10m %ld, want 600", r.ticks10m);
+    CHECK(T, r.disc10m == 0, "disc10m %ld, want 0", r.disc10m);
+    CHECK(T, fabs(r.fresh10m - 100.0) < 1e-9, "fresh10m %g, want 100", r.fresh10m);
+    CHECK(T, fabs(r.lastInterval - 0.5) < 1e-9, "lastInterval %g, want 0.5", r.lastInterval);
+    CHECK(T, fabs(r.maxGap10m - 0.5) < 1e-9, "maxGap10m %g, want 0.5", r.maxGap10m);
+    return 0;
+}
+
+static int t_o2diag_2s(void)
+{
+    const char *T = "O2 O2 update every 2 s, 1 Hz tick: 50% fresh, 2 s interval";
+    sg_o2diag d; sg_o2diag_report r;
+    int i;
+    sg_o2diag_init(&d);
+    /* the same time stamp is seen for two consecutive ticks, then jumps by 2 s: fresh on every
+       other tick */
+    for (i = 1; i <= 600; i++) {
+        unsigned sec = (unsigned)(2 * ((i + 1) / 2));
+        sg_o2diag_tick(&d, (double)i, 1, sec, 0);
+    }
+    sg_o2diag_get(&d, &r);
+    CHECK(T, r.ticks10m == 600, "ticks10m %ld, want 600", r.ticks10m);
+    CHECK(T, fabs(r.fresh10m - 50.0) < 1e-9, "fresh10m %g, want 50", r.fresh10m);
+    CHECK(T, fabs(r.lastInterval - 2.0) < 1e-9, "lastInterval %g, want 2", r.lastInterval);
+    CHECK(T, fabs(r.maxGap10m - 2.0) < 1e-9, "maxGap10m %g, want 2", r.maxGap10m);
+    return 0;
+}
+
+static int t_o2diag_gap(void)
+{
+    const char *T = "O3 a 5 s gap: maximum interval 5, latest interval back to 1 afterwards";
+    sg_o2diag d; sg_o2diag_report r;
+    unsigned ts = 1000;
+    int i;
+    sg_o2diag_init(&d);
+    for (i = 1; i <= 200; i++) {
+        if (i == 1) ts = 1000;
+        else if (i == 101) ts += 5;     /* one 5 s gap */
+        else ts += 1;
+        sg_o2diag_tick(&d, (double)i, 1, ts, 0);
+    }
+    sg_o2diag_get(&d, &r);
+    CHECK(T, r.ticks10m == 200, "ticks10m %ld, want 200", r.ticks10m);
+    CHECK(T, fabs(r.maxGap10m - 5.0) < 1e-9, "maxGap10m %g, want 5", r.maxGap10m);
+    CHECK(T, fabs(r.lastInterval - 1.0) < 1e-9, "lastInterval %g, want 1 (back to normal)",
+          r.lastInterval);
+    return 0;
+}
+
+static int t_o2diag_rollover(void)
+{
+    const char *T = "O4 both rings roll over: old disconnected data is fully evicted";
+    sg_o2diag d; sg_o2diag_report r;
+    int i; double now = 0;
+    sg_o2diag_init(&d);
+
+    /* old, bad data: disconnected for a while */
+    for (i = 0; i < 120; i++) { now += 1; sg_o2diag_tick(&d, now, 0, 0, 0); }
+    sg_o2diag_get(&d, &r);
+    CHECK(T, r.disc10m == 120 && fabs(r.fresh10m - 0.0) < 1e-9,
+          "setup: disc10m %ld fresh10m %g", r.disc10m, r.fresh10m);
+
+    /* the 600-tick ring (10 min): exactly 600 fresh ticks fully evict the bad ones */
+    for (i = 0; i < 600; i++) { now += 1; sg_o2diag_tick(&d, now, 1, (unsigned)now, 0); }
+    sg_o2diag_get(&d, &r);
+    CHECK(T, r.ticks10m == 600, "ticks10m %ld after rollover, want 600 (capped)", r.ticks10m);
+    CHECK(T, r.disc10m == 0, "disc10m %ld after rollover, want 0", r.disc10m);
+    CHECK(T, fabs(r.fresh10m - 100.0) < 1e-9, "fresh10m %g after rollover, want 100", r.fresh10m);
+
+    /* the 1440-bin ring (24 h): enough further good ticks to evict the early bins that still
+       held the disconnected minutes */
+    for (i = 0; i < 100000; i++) { now += 1; sg_o2diag_tick(&d, now, 1, (unsigned)now, 0); }
+    sg_o2diag_get(&d, &r);
+    CHECK(T, fabs(r.fresh24h - 100.0) < 1e-9, "fresh24h %g after bin rollover, want 100",
+          r.fresh24h);
+    return 0;
+}
+
+static int t_o2diag_disconnect(void)
+{
+    const char *T = "O5 a disconnection: not fresh, counted, interval spans the gap correctly";
+    sg_o2diag d; sg_o2diag_report r;
+    int i;
+    sg_o2diag_init(&d);
+    sg_o2diag_tick(&d, 1, 1, 10, 0);                              /* first fresh tick, ts 10 s */
+    for (i = 0; i < 5; i++) sg_o2diag_tick(&d, 2 + i, 0, 0, 0);    /* 5 disconnected ticks */
+    sg_o2diag_tick(&d, 7, 1, 20, 0);                               /* reconnect, ts 20 s */
+    sg_o2diag_get(&d, &r);
+    CHECK(T, r.ticks10m == 7, "ticks10m %ld, want 7", r.ticks10m);
+    CHECK(T, r.disc10m == 5, "disc10m %ld, want 5", r.disc10m);
+    CHECK(T, fabs(r.fresh10m - (2.0 / 7.0 * 100.0)) < 1e-9,
+          "fresh10m %g, want %g (2 of 7)", r.fresh10m, 2.0 / 7.0 * 100.0);
+    CHECK(T, fabs(r.lastInterval - 10.0) < 1e-9,
+          "lastInterval %g, want 10 (20 - 10 across the disconnection, not reset by it)",
+          r.lastInterval);
+    CHECK(T, fabs(r.maxGap10m - 10.0) < 1e-9, "maxGap10m %g, want 10", r.maxGap10m);
+    return 0;
+}
+
+static int t_o2diag_backwards(void)
+{
+    const char *T = "O6 time stamp going backwards: new update, interval clamped to 0";
+    sg_o2diag d; sg_o2diag_report r;
+    sg_o2diag_init(&d);
+    sg_o2diag_tick(&d, 1, 1, 100, 0);    /* first fresh tick, ts = 100 s */
+    sg_o2diag_tick(&d, 2, 1, 50, 0);     /* ts goes backwards to 50 s: still a new value */
+    sg_o2diag_get(&d, &r);
+    CHECK(T, r.ticks10m == 2, "ticks10m %ld, want 2", r.ticks10m);
+    CHECK(T, fabs(r.fresh10m - 100.0) < 1e-9, "fresh10m %g, want 100 (both ticks fresh)",
+          r.fresh10m);
+    CHECK(T, r.lastInterval == 0.0, "lastInterval %g, want 0 (clamped, not -50)", r.lastInterval);
+    CHECK(T, r.maxGap10m == 0.0, "maxGap10m %g, want 0", r.maxGap10m);
+    /* a further tick, forward from the new (clamped) reference: an ordinary positive interval */
+    sg_o2diag_tick(&d, 3, 1, 53, 0);
+    sg_o2diag_get(&d, &r);
+    CHECK(T, r.lastInterval == 3.0, "lastInterval %g, want 3 (53 - 50)", r.lastInterval);
+    return 0;
+}
+
 int main(void)
 {
     static int (*const tests[])(void) = {
@@ -902,6 +1039,8 @@ int main(void)
         t_cfg_not_configured, t_cfg_empty_mfc, t_cfg_trim, t_cfg_he_save,
         t_logfile, t_logfile_month_boundary, t_logfile_write_error,
         t_report_text,
+        t_o2diag_2hz, t_o2diag_2s, t_o2diag_gap, t_o2diag_rollover, t_o2diag_disconnect,
+        t_o2diag_backwards,
     };
     const int n = (int)(sizeof tests / sizeof tests[0]);
     int i, fails = 0;

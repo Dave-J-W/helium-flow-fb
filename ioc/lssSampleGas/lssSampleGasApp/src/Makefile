@@ -28,7 +28,7 @@ sgReplay_SYS_LIBS_Linux += m
 # EPICS dependency: the write gate and shadow logging (spec §8.3, §8.20), the PV-name apply rules
 # (spec §8.21), the persistent monthly log (spec §8.19, §7.6), and the usage-report text (§7.7)
 TESTPROD_HOST += sgIocTest
-sgIocTest_SRCS += sgIocTest.c sgGate.c sgCfg.c sgLogFile.c sgText.c sgStart.c $(CORE_SRCS)
+sgIocTest_SRCS += sgIocTest.c sgGate.c sgCfg.c sgLogFile.c sgText.c sgStart.c sgO2Diag.c $(CORE_SRCS)
 sgIocTest_SYS_LIBS_Linux += m
 
 # ---------------------------------------------------------------- the IOC (Plan 2 task 3)
@@ -40,7 +40,7 @@ sgIocTest_SYS_LIBS_Linux += m
 # O.<arch> directory and must link the plain ones without EPICS.
 LIBRARY_IOC += sampleGasSupport
 sampleGasSupport_SRCS += $(CORE_SRCS)
-sampleGasSupport_SRCS += sgGate.c sgCfg.c sgLogFileIoc.c sgTextIoc.c sgPvTable.c sgStart.c
+sampleGasSupport_SRCS += sgGate.c sgCfg.c sgLogFileIoc.c sgTextIoc.c sgPvTable.c sgStart.c sgO2Diag.c
 sampleGasSupport_SRCS += sgIoc.c
 sampleGasSupport_SRCS += sampleGas.st
 sampleGasSupport_LIBS += std calc seq pv autosave

@@ -437,6 +437,16 @@ itself; it is the client's job (§13.4).
 - **Log:** `Log:Text` (waveform CHAR, 16384): the event log, newest first, format
   `YYYY-MM-DD hh:mm:ss  <STN>  [MINOR|MAJOR]  message` (as §8.19; the station label is
   required, decided by the user 2026-09-25). Keep the last ~200 lines.
+- **O2 update diagnostics** (user's request, 2026-10-01, after raising the O2 IOC's own update
+  rate to 2 Hz so the 1 Hz control loop always has a fresh reading): how reliably the O2
+  channel's CA time stamp delivers a NEW reading to the controller's tick. Pure observation --
+  no alarms, no severities, no effect on any decision. `O2Fresh10m` (%, over the last 10 min),
+  `O2Fresh24h` (%, over the last 24 h), `O2MaxGap10m` and `O2MaxGap24h` (s, the longest interval
+  between successive new time stamps in each window), `O2Interval` (s, the latest such
+  interval), `O2Ticks10m` (ticks counted in the 10-min window, so a freshly started IOC shows
+  how much data the percentages rest on), `O2Disconn10m` (of those, how many had the O2 channel
+  disconnected or with no time stamp yet -- distinguishes a disconnection from a merely slow
+  sensor). Not autosaved: restarts from zero at every IOC boot.
 
 The epid record (`$(P)PID`) fields are directly readable.
 

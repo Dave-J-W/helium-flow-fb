@@ -33,6 +33,7 @@ GEN = os.path.join(HERE, "gen_screens.py")
 
 sys.path.insert(0, HERE)
 import sg_pvs  # noqa: E402
+import gen_screens  # noqa: E402
 
 BOB = {
     "simple": os.path.join(SCREENS, "sampleGas_simple.bob"),
@@ -789,6 +790,10 @@ class TestArchiveList(unittest.TestCase):
             self.assertEqual(rows.pop(P + f"Alm:{n}")[1], "MONITOR", n)
         for f in ("MFC", "O2", "CYL", "STN"):
             self.assertEqual(rows.pop(P + f"Cfg:Active:{f}")[1], "MONITOR", f)
+        # O2 update diagnostics (user's request, 2026-10-01): archived at the same 1 s SCAN rate
+        # as the other process values above.
+        for s in gen_screens.ARCHIVE_O2DIAG:
+            self.assertEqual(rows.pop(P + s), (1.0, "SCAN"), s)
         self.assertEqual(rows, {}, "unexpected extra PVs")
 
 

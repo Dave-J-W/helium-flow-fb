@@ -1530,6 +1530,44 @@ record(lsi, "$(P)Diag:OverrideLog") {
     field(SIZV, "4096")
 }
 
+record(ai, "$(P)Diag:O2Fresh10m") {
+    field(DESC, "O2 fresh-tick pct, 10 min")
+    field(EGU, "%")
+    field(PREC, "1")
+}
+
+record(ai, "$(P)Diag:O2Fresh24h") {
+    field(DESC, "O2 fresh-tick pct, 24 h")
+    field(EGU, "%")
+    field(PREC, "2")
+}
+
+record(ai, "$(P)Diag:O2MaxGap10m") {
+    field(DESC, "Longest O2 update gap, 10 min")
+    field(EGU, "s")
+    field(PREC, "1")
+}
+
+record(ai, "$(P)Diag:O2MaxGap24h") {
+    field(DESC, "Longest O2 update gap, 24 h")
+    field(EGU, "s")
+    field(PREC, "1")
+}
+
+record(ai, "$(P)Diag:O2Interval") {
+    field(DESC, "Latest O2 update interval")
+    field(EGU, "s")
+    field(PREC, "2")
+}
+
+record(longin, "$(P)Diag:O2Ticks10m") {
+    field(DESC, "Ticks counted, 10 min window")
+}
+
+record(longin, "$(P)Diag:O2Disconn10m") {
+    field(DESC, "O2 disconnected ticks, 10 min")
+}
+
 record(waveform, "$(P)Log:Text") {
     field(DESC, "Event log, newest first")
     field(FTVL, "CHAR")

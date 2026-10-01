@@ -156,6 +156,16 @@ ADMIN_DIAG = [
     ("Diag:Blind", "blind"), ("Diag:HandoffPhase", "handoff phase"),
 ]
 
+# O2 update diagnostics (user's request, 2026-10-01), shown as their own small group below the
+# main Diag: grid rather than mixed into it (§7.6): how reliably the O2 CA time stamp delivers a
+# new reading to the 1 Hz tick. Pure observation, no alarms.
+O2_UPDATE_DIAG = [
+    ("Diag:O2Fresh10m", "fresh, 10 min"), ("Diag:O2Fresh24h", "fresh, 24 h"),
+    ("Diag:O2MaxGap10m", "max gap, 10 min"), ("Diag:O2MaxGap24h", "max gap, 24 h"),
+    ("Diag:O2Interval", "latest interval"), ("Diag:O2Ticks10m", "ticks, 10 min"),
+    ("Diag:O2Disconn10m", "disconnected, 10 min"),
+]
+
 EPID_FIELDS = ["FBON", "VAL", "CVAL", "OVAL", "P", "I", "KP", "KI", "DRVL", "DRVH", "ODEL"]
 FORECAST_WINDOWS = [("3d", "3 d"), ("2d", "2 d"), ("1d", "1 d"), ("12h", "12 h"), ("6h", "6 h")]
 
@@ -824,6 +834,18 @@ def build_admin():
         textupdate(c, f"diag_{i}", P + pv, x + 100, y + r * 20, 96, 20, size=11, family=MONO,
                    units=True, border=False)
     y += ((len(ADMIN_DIAG) + 3) // 4) * 20 + 10
+
+    # O2 updates (user's request, 2026-10-01): its own small group, separate from the flat Diag
+    # grid above, so the question "is the O2 reading keeping up?" has one place to look.
+    label(c, "o2diag_lbl", "O2 updates", 10, y, 100, 20, size=11, style="BOLD", fg=TEXT)
+    y += 20
+    for i, (pv, text) in enumerate(O2_UPDATE_DIAG):
+        r, col = divmod(i, 4)
+        x = 10 + col * 200
+        label(c, f"o2diag_{i}_lbl", text, x, y + r * 20, 100, 20, size=11)
+        textupdate(c, f"o2diag_{i}", P + pv, x + 100, y + r * 20, 96, 20, size=11, family=MONO,
+                   units=True, border=False)
+    y += ((len(O2_UPDATE_DIAG) + 3) // 4) * 20 + 10
     root.find("height").text = str(y)
     return serialize(root, GEN_NOTE + " Spec 13.2 Admin.")
 
@@ -1018,6 +1040,11 @@ def build_alarms_bench():
 
 ARCHIVE_SCAN_1S = ["Sts:O2", "Sts:State", "Sts:Flow", "Sts:SetpointRBV", "Sts:LastCmd"]
 
+# O2 update diagnostics (user's request, 2026-10-01): kept archived so a disconnection or a slow
+# sensor shows up in the history, not only on the live screen.
+ARCHIVE_O2DIAG = ["Diag:O2Fresh10m", "Diag:O2Fresh24h", "Diag:O2MaxGap10m", "Diag:O2MaxGap24h",
+                   "Diag:O2Interval", "Diag:O2Ticks10m", "Diag:O2Disconn10m"]
+
 
 def build_archive():
     lines = [
@@ -1041,6 +1068,9 @@ def build_archive():
                      "came from)")
         for f in ("MFC", "O2", "CYL", "STN"):
             lines.append(f"{prefix}Cfg:Active:{f}  1  MONITOR")
+        lines.append(f"# {station}: O2 update diagnostics, 1 s")
+        for s in ARCHIVE_O2DIAG:
+            lines.append(f"{prefix}{s}  1  SCAN")
     return "\n".join(lines) + "\n"
 
 

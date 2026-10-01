@@ -214,6 +214,22 @@ again: the purge's lid check stops the flow if the enclosure is open.
 - **Overrides:** how often the controller corrected an Alicat setting, and the list.
 - **Helium usage report** and the **live internals** (epid record, forecast windows,
   diagnostics) for troubleshooting.
+- **O2 updates:** a small group below the diagnostics grid, showing how reliably the O2 reading
+  itself is arriving -- separate from everything else the controller does, and with no alarm of
+  its own. **Fresh, 10 min** and **Fresh, 24 h** are the percentage of controller ticks (once a
+  second) that saw a genuinely new O2 reading since the tick before; **max gap** is the longest
+  stretch, in seconds, between two such new readings in that window; **latest interval** is the
+  most recent one; **ticks, 10 min** says how many seconds of data the two percentages above
+  rest on (low right after a restart, so a 100 % reading from the first few seconds is not yet
+  meaningful); **disconnected, 10 min** is how many of those ticks had the O2 channel outright
+  disconnected (as opposed to connected but simply slow to update). These numbers do not feed
+  into any alarm, state or decision -- they exist only so a slow or missed O2 update shows up
+  here instead of being invisible. If **Fresh, 10 min** stays below about 95 %: check
+  **disconnected, 10 min** first. If it is 0, the O2 analyzer or its CA link is just slower than
+  expected (the O2 IOC's own update rate, or a network hiccup) -- not urgent by itself, but worth
+  a look if it persists, since the purge's lid check relies on a fresh O2 sample. If
+  **disconnected, 10 min** is non-zero, the O2 channel has actually dropped out; check `Cfg:O2`
+  and the O2 analyzer's own IOC the way you would for any other disconnected PV.
 
 ## 10. Deep admin
 

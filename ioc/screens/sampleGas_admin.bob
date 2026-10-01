@@ -3,7 +3,7 @@
 <display version="2.0.0">
   <name>Sample gas: Admin</name>
   <width>820</width>
-  <height>946</height>
+  <height>1016</height>
   <background_color>
     <color red="244" green="244" blue="244" />
   </background_color>
@@ -3165,6 +3165,267 @@
     <pv_name>$(P)Diag:HandoffPhase</pv_name>
     <x>710</x>
     <y>916</y>
+    <width>96</width>
+    <height>20</height>
+    <font>
+      <font family="Liberation Mono" style="REGULAR" size="11.0" />
+    </font>
+    <foreground_color>
+      <color red="34" green="34" blue="34" />
+    </foreground_color>
+    <transparent>true</transparent>
+    <show_units>true</show_units>
+    <horizontal_alignment>0</horizontal_alignment>
+    <vertical_alignment>1</vertical_alignment>
+    <border_alarm_sensitive>false</border_alarm_sensitive>
+  </widget>
+  <widget type="label" version="2.0.0">
+    <name>o2diag_lbl</name>
+    <text>O2 updates</text>
+    <x>10</x>
+    <y>946</y>
+    <width>100</width>
+    <height>20</height>
+    <font>
+      <font family="Liberation Sans" style="BOLD" size="11.0" />
+    </font>
+    <foreground_color>
+      <color red="34" green="34" blue="34" />
+    </foreground_color>
+    <horizontal_alignment>0</horizontal_alignment>
+    <vertical_alignment>1</vertical_alignment>
+  </widget>
+  <widget type="label" version="2.0.0">
+    <name>o2diag_0_lbl</name>
+    <text>fresh, 10 min</text>
+    <x>10</x>
+    <y>966</y>
+    <width>100</width>
+    <height>20</height>
+    <font>
+      <font family="Liberation Sans" style="REGULAR" size="11.0" />
+    </font>
+    <foreground_color>
+      <color red="85" green="85" blue="85" />
+    </foreground_color>
+    <horizontal_alignment>0</horizontal_alignment>
+    <vertical_alignment>1</vertical_alignment>
+  </widget>
+  <widget type="textupdate" version="2.0.0">
+    <name>o2diag_0</name>
+    <pv_name>$(P)Diag:O2Fresh10m</pv_name>
+    <x>110</x>
+    <y>966</y>
+    <width>96</width>
+    <height>20</height>
+    <font>
+      <font family="Liberation Mono" style="REGULAR" size="11.0" />
+    </font>
+    <foreground_color>
+      <color red="34" green="34" blue="34" />
+    </foreground_color>
+    <transparent>true</transparent>
+    <show_units>true</show_units>
+    <horizontal_alignment>0</horizontal_alignment>
+    <vertical_alignment>1</vertical_alignment>
+    <border_alarm_sensitive>false</border_alarm_sensitive>
+  </widget>
+  <widget type="label" version="2.0.0">
+    <name>o2diag_1_lbl</name>
+    <text>fresh, 24 h</text>
+    <x>210</x>
+    <y>966</y>
+    <width>100</width>
+    <height>20</height>
+    <font>
+      <font family="Liberation Sans" style="REGULAR" size="11.0" />
+    </font>
+    <foreground_color>
+      <color red="85" green="85" blue="85" />
+    </foreground_color>
+    <horizontal_alignment>0</horizontal_alignment>
+    <vertical_alignment>1</vertical_alignment>
+  </widget>
+  <widget type="textupdate" version="2.0.0">
+    <name>o2diag_1</name>
+    <pv_name>$(P)Diag:O2Fresh24h</pv_name>
+    <x>310</x>
+    <y>966</y>
+    <width>96</width>
+    <height>20</height>
+    <font>
+      <font family="Liberation Mono" style="REGULAR" size="11.0" />
+    </font>
+    <foreground_color>
+      <color red="34" green="34" blue="34" />
+    </foreground_color>
+    <transparent>true</transparent>
+    <show_units>true</show_units>
+    <horizontal_alignment>0</horizontal_alignment>
+    <vertical_alignment>1</vertical_alignment>
+    <border_alarm_sensitive>false</border_alarm_sensitive>
+  </widget>
+  <widget type="label" version="2.0.0">
+    <name>o2diag_2_lbl</name>
+    <text>max gap, 10 min</text>
+    <x>410</x>
+    <y>966</y>
+    <width>100</width>
+    <height>20</height>
+    <font>
+      <font family="Liberation Sans" style="REGULAR" size="11.0" />
+    </font>
+    <foreground_color>
+      <color red="85" green="85" blue="85" />
+    </foreground_color>
+    <horizontal_alignment>0</horizontal_alignment>
+    <vertical_alignment>1</vertical_alignment>
+  </widget>
+  <widget type="textupdate" version="2.0.0">
+    <name>o2diag_2</name>
+    <pv_name>$(P)Diag:O2MaxGap10m</pv_name>
+    <x>510</x>
+    <y>966</y>
+    <width>96</width>
+    <height>20</height>
+    <font>
+      <font family="Liberation Mono" style="REGULAR" size="11.0" />
+    </font>
+    <foreground_color>
+      <color red="34" green="34" blue="34" />
+    </foreground_color>
+    <transparent>true</transparent>
+    <show_units>true</show_units>
+    <horizontal_alignment>0</horizontal_alignment>
+    <vertical_alignment>1</vertical_alignment>
+    <border_alarm_sensitive>false</border_alarm_sensitive>
+  </widget>
+  <widget type="label" version="2.0.0">
+    <name>o2diag_3_lbl</name>
+    <text>max gap, 24 h</text>
+    <x>610</x>
+    <y>966</y>
+    <width>100</width>
+    <height>20</height>
+    <font>
+      <font family="Liberation Sans" style="REGULAR" size="11.0" />
+    </font>
+    <foreground_color>
+      <color red="85" green="85" blue="85" />
+    </foreground_color>
+    <horizontal_alignment>0</horizontal_alignment>
+    <vertical_alignment>1</vertical_alignment>
+  </widget>
+  <widget type="textupdate" version="2.0.0">
+    <name>o2diag_3</name>
+    <pv_name>$(P)Diag:O2MaxGap24h</pv_name>
+    <x>710</x>
+    <y>966</y>
+    <width>96</width>
+    <height>20</height>
+    <font>
+      <font family="Liberation Mono" style="REGULAR" size="11.0" />
+    </font>
+    <foreground_color>
+      <color red="34" green="34" blue="34" />
+    </foreground_color>
+    <transparent>true</transparent>
+    <show_units>true</show_units>
+    <horizontal_alignment>0</horizontal_alignment>
+    <vertical_alignment>1</vertical_alignment>
+    <border_alarm_sensitive>false</border_alarm_sensitive>
+  </widget>
+  <widget type="label" version="2.0.0">
+    <name>o2diag_4_lbl</name>
+    <text>latest interval</text>
+    <x>10</x>
+    <y>986</y>
+    <width>100</width>
+    <height>20</height>
+    <font>
+      <font family="Liberation Sans" style="REGULAR" size="11.0" />
+    </font>
+    <foreground_color>
+      <color red="85" green="85" blue="85" />
+    </foreground_color>
+    <horizontal_alignment>0</horizontal_alignment>
+    <vertical_alignment>1</vertical_alignment>
+  </widget>
+  <widget type="textupdate" version="2.0.0">
+    <name>o2diag_4</name>
+    <pv_name>$(P)Diag:O2Interval</pv_name>
+    <x>110</x>
+    <y>986</y>
+    <width>96</width>
+    <height>20</height>
+    <font>
+      <font family="Liberation Mono" style="REGULAR" size="11.0" />
+    </font>
+    <foreground_color>
+      <color red="34" green="34" blue="34" />
+    </foreground_color>
+    <transparent>true</transparent>
+    <show_units>true</show_units>
+    <horizontal_alignment>0</horizontal_alignment>
+    <vertical_alignment>1</vertical_alignment>
+    <border_alarm_sensitive>false</border_alarm_sensitive>
+  </widget>
+  <widget type="label" version="2.0.0">
+    <name>o2diag_5_lbl</name>
+    <text>ticks, 10 min</text>
+    <x>210</x>
+    <y>986</y>
+    <width>100</width>
+    <height>20</height>
+    <font>
+      <font family="Liberation Sans" style="REGULAR" size="11.0" />
+    </font>
+    <foreground_color>
+      <color red="85" green="85" blue="85" />
+    </foreground_color>
+    <horizontal_alignment>0</horizontal_alignment>
+    <vertical_alignment>1</vertical_alignment>
+  </widget>
+  <widget type="textupdate" version="2.0.0">
+    <name>o2diag_5</name>
+    <pv_name>$(P)Diag:O2Ticks10m</pv_name>
+    <x>310</x>
+    <y>986</y>
+    <width>96</width>
+    <height>20</height>
+    <font>
+      <font family="Liberation Mono" style="REGULAR" size="11.0" />
+    </font>
+    <foreground_color>
+      <color red="34" green="34" blue="34" />
+    </foreground_color>
+    <transparent>true</transparent>
+    <show_units>true</show_units>
+    <horizontal_alignment>0</horizontal_alignment>
+    <vertical_alignment>1</vertical_alignment>
+    <border_alarm_sensitive>false</border_alarm_sensitive>
+  </widget>
+  <widget type="label" version="2.0.0">
+    <name>o2diag_6_lbl</name>
+    <text>disconnected, 10 min</text>
+    <x>410</x>
+    <y>986</y>
+    <width>100</width>
+    <height>20</height>
+    <font>
+      <font family="Liberation Sans" style="REGULAR" size="11.0" />
+    </font>
+    <foreground_color>
+      <color red="85" green="85" blue="85" />
+    </foreground_color>
+    <horizontal_alignment>0</horizontal_alignment>
+    <vertical_alignment>1</vertical_alignment>
+  </widget>
+  <widget type="textupdate" version="2.0.0">
+    <name>o2diag_6</name>
+    <pv_name>$(P)Diag:O2Disconn10m</pv_name>
+    <x>510</x>
+    <y>986</y>
     <width>96</width>
     <height>20</height>
     <font>

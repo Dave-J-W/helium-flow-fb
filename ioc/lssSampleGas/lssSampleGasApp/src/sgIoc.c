@@ -64,6 +64,7 @@
 #include "sgIoc.h"
 #include "sgPvTable.h"
 #include "sgFmt.h"
+#include "sgO2Diag.h"
 
 #include <epicsExport.h>
 
@@ -168,6 +169,13 @@ enum { PK_NUM, PK_STR, PK_TXT, PK_ARR };
     X(DG_HPHASE,      "Diag:HandoffPhase",      PK_NUM) \
     X(DG_OVRCOUNT,    "Diag:OverrideCount",     PK_NUM) \
     X(DG_OVRLOG,      "Diag:OverrideLog.VAL$",  PK_TXT) \
+    X(DG_O2FRESH10M,  "Diag:O2Fresh10m",        PK_NUM) \
+    X(DG_O2FRESH24H,  "Diag:O2Fresh24h",        PK_NUM) \
+    X(DG_O2MAXGAP10M, "Diag:O2MaxGap10m",       PK_NUM) \
+    X(DG_O2MAXGAP24H, "Diag:O2MaxGap24h",       PK_NUM) \
+    X(DG_O2INTERVAL,  "Diag:O2Interval",        PK_NUM) \
+    X(DG_O2TICKS10M,  "Diag:O2Ticks10m",        PK_NUM) \
+    X(DG_O2DISCONN10M,"Diag:O2Disconn10m",      PK_NUM) \
     X(LOG_TEXT,       "Log:Text",               PK_TXT) \
     X(CFG_ACT_MFC,    "Cfg:Active:MFC",         PK_STR) \
     X(CFG_ACT_O2,     "Cfg:Active:O2",          PK_STR) \
@@ -274,6 +282,8 @@ struct sg_station {
     int liveInWait, releaseInWait;      /* D2, D8: remembered during the start-up wait */
     int caConnected;                    /* the Alicat's CA state this tick (the gate's flag) */
     sg_stale flowStale;                 /* G3: Flow_RBV time-stamp clock */
+    sg_o2diag o2diag;                   /* user's request 2026-10-01: O2 update-rate diagnostic;
+                                            pure observation, see sgO2Diag.h */
     /* addresses */
     pubSlot pub[P_N], alm[SG_NALM], almMsg[SG_NALM];
     DBADDR in[IN_N];
@@ -816,6 +826,7 @@ sg_station *sgIocCreate(const char *prefix, const char *logDir, const char *heli
     SG_MKDIR(logDir);                                   /* exists already: fine */
     stationLabel(s, label, sizeof label);
     sg_logfile_init(&s->L, logDir, label);
+    sg_o2diag_init(&s->o2diag);         /* not autosaved: restarts from zero, spec 7.6 */
 
     /* autosaved state into the core, before sg_restart (sgCore.h "First tick") */
     readParams(s, 1);
@@ -1008,6 +1019,12 @@ static void buildInputs(sg_station *s, sg_inputs *in)
     sg_chan *gas = &s->ch[SG_GRP_S][SG_CS_GAS];
     for (g = 0; g < SG_NGRP; g++)
         for (i = 0; i < grpSize[g]; i++) chanUpdate(&s->ch[g][i], g, 1);
+    /* user's request 2026-10-01: pure observation of the O2 channel's own update rate, not used
+       by anything below -- d[SG_CD_O2].ok is sg_chan's own "connected and has a value" test
+       (false while disconnected or before the first value), exactly the "disconnected or no
+       time stamp" condition sgO2Diag.h asks for; tsSec/tsNsec are this tick's raw CA time stamp,
+       never compared with s->tickNow (a different clock) */
+    sg_o2diag_tick(&s->o2diag, s->tickNow, d[SG_CD_O2].ok, d[SG_CD_O2].tsSec, d[SG_CD_O2].tsNsec);
     memset(in, 0, sizeof *in);
     /* sgCore.h sg_inputs: last received values, never a default for a disconnection */
     in->o2 = d[SG_CD_O2].have ? d[SG_CD_O2].lastV : NAN;
@@ -1394,6 +1411,18 @@ static void publish(sg_station *s)
     pubNum(&s->pub[DG_OVRCOUNT], (double)c->overrideCount);
     overrideText(c, s->txt, sizeof s->txt);
     pubTxt(&s->pub[DG_OVRLOG], s->txt);
+    {
+        /* user's request 2026-10-01: pure observation, no alarms, no effect on any decision */
+        sg_o2diag_report o2r;
+        sg_o2diag_get(&s->o2diag, &o2r);
+        pubNum(&s->pub[DG_O2FRESH10M], o2r.fresh10m);
+        pubNum(&s->pub[DG_O2FRESH24H], o2r.fresh24h);
+        pubNum(&s->pub[DG_O2MAXGAP10M], o2r.maxGap10m);
+        pubNum(&s->pub[DG_O2MAXGAP24H], o2r.maxGap24h);
+        pubNum(&s->pub[DG_O2INTERVAL], o2r.lastInterval);
+        pubNum(&s->pub[DG_O2TICKS10M], (double)o2r.ticks10m);
+        pubNum(&s->pub[DG_O2DISCONN10M], (double)o2r.disc10m);
+    }
 
     publishHelium(s);
 
