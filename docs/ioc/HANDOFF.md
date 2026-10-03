@@ -7,6 +7,10 @@ authority; the user's decisions of 2026-09-28 are written into it.
 
 ## 0b. State and findings, 2026-09-30 to 10-01 (supersedes 0a where they differ)
 
+**Screens in operation (user, 2026-10-03).** The `.bob` displays the beamline uses are the user's own copies, kept outside this repo, and the user has already changed them. The repo's `ioc/screens/*.bob`, made by `gen_screens.py`, are no longer what operators see.
+- Never copy or regenerate over the user's copies.
+- When a change touches the screens, update the generator as usual. Then hand the user a list of the widget and PV changes, or a diff, to carry into their version.
+
 **Install and first live run**
 - **Install location:** the user installed at `support/lssSampleGas` (no `ChemMat/`). `make` and the
   unit tests passed on chemmat-C92.
