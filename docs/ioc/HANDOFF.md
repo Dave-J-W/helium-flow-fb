@@ -26,7 +26,7 @@ authority; the user's decisions of 2026-09-28 are written into it.
 - **Raw sampling, from the archiver's own PV config:**
   - O2 was about every 5 s from 2026-08-25T20:28Z to 2026-09-24T18:17:45Z, and about every 1.005 s since.
   - Flow_RBV is about every 10 s throughout.
-- **Resampled exports:** the "1Hz 10d" exports were resampled by the archiver (mean_1, forward-filled). Their Flow_RBV is mostly filled values, and part of their repeated O2 values are resampling artefacts. Use the RAW files and `HANDOFF_archiver_pulls_2026-10-01.md` in `o2-purge-plan2\analysis\data\`, and the `pv-retrieval` skill.
+- **Resampled exports:** the "1Hz 10d" exports were resampled by the archiver (mean_1, forward-filled). Their Flow_RBV is mostly filled values, and part of their repeated O2 values are resampling artefacts. Use the RAW files and `HANDOFF_archiver_pulls_2026-10-01.md` in `Claude Locals\o2-purge-data\`, which is deliberately outside git (moved 2026-10-28), and the `pv-retrieval` skill.
 - **Sensor rate:** on 2026-10-01 the user raised the O2 IOC's update rate to 2 Hz.
 
 **Lid-open O2 (116 h of 1 Hz data)**
